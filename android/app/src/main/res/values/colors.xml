@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="wolphun_orange">#E8451F</color>
+    <color name="wolphun_orange_dark">#C0341A</color>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+    <color name="keypad">#66FFFFFF</color>
+    <color name="keypad_pressed">#AAE8451F</color>
+</resources>

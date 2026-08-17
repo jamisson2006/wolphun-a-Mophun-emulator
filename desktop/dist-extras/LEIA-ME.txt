@@ -1,0 +1,33 @@
+====================================================================
+  wolphun emulator  0.1.0 (beta)  -  Maned Software
+  Emulador de jogos mobile Mophun (PIP2), por Jamisson Tavares.
+====================================================================
+
+COMO USAR
+  De dois cliques em  "wolphun emulator.exe".
+  (ou use o atalho  "Iniciar wolphun emulator.bat")
+  Nao precisa ter Java instalado: o runtime ja vem embutido nesta pasta.
+
+PRIMEIRA VEZ
+  Menu  Arquivo > Definir pasta de ROMs...  e aponte para a pasta com seus
+  jogos (uma subpasta por jogo, com o .mpn dentro). ROMs criptografados
+  (.mpn com DRM) sao detectados e descriptografados automaticamente ao abrir.
+
+ONDE FICAM SEUS DADOS  (na sua conta de usuario, FORA desta pasta):
+  %USERPROFILE%\.mophunemu\
+    +- config.properties     configuracoes (video, som, controles, idioma)
+    +- saves\<jogo>\         save NATIVO do jogo + save state (F5/F8)
+    +- decrypted\           copias descriptografadas em cache dos .mpn
+
+  Como os dados ficam em %USERPROFILE%\.mophunemu, voce pode mover ou renomear
+  esta pasta do emulador sem perder saves nem configuracoes. E os saves feitos
+  na versao .bat (codigo-fonte) e na versao .exe sao os MESMOS (mesma pasta).
+
+CONTROLES  (padrao; remapeaveis em Configuracoes > Controles)
+  Mover ............. setas / WASD / numpad
+  Fire / OK ......... Espaco, Enter, Ctrl
+  Select (menu/voltar) ... Q, tecla 0
+  Fire2 ............. E, Backspace
+  Save state: F5     Load state: F8     Pausar: Ctrl+P     Fechar: Ctrl+W
+
+(c) 2026 Maned Software  -  youtube.com/@jamissontavares7671

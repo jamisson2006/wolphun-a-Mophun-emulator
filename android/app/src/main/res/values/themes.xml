@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="AppTheme" parent="Theme.MaterialComponents.Light.DarkActionBar">
+        <item name="colorPrimary">@color/wolphun_orange</item>
+        <item name="colorPrimaryDark">@color/wolphun_orange_dark</item>
+        <item name="colorAccent">@color/wolphun_orange</item>
+    </style>
+
+    <style name="AppTheme.Fullscreen" parent="Theme.MaterialComponents.NoActionBar">
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowBackground">@color/black</item>
+    </style>
+</resources>

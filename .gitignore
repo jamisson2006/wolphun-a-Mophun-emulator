@@ -1,0 +1,28 @@
+# ---- desktop (Java) build outputs ----
+desktop/out/
+desktop/build/
+desktop/dist/
+desktop/sources.txt
+desktop/*.zip
+
+# ---- android build outputs ----
+android/build/
+android/app/build/
+android/.gradle/
+android/.idea/
+android/local.properties
+android/*.iml
+android/.externalNativeBuild/
+android/.cxx/
+
+# ---- game ROMs / user data (never commit) ----
+*.mpn
+saves/
+
+# ---- OS ----
+.DS_Store
+Thumbs.db
+
+# IDE modules
+**/*.iml
+.idea/

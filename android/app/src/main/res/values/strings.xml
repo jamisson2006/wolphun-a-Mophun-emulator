@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">wolphun emulator</string>
+    <string name="menu_settings">Configurações</string>
+    <string name="add_rom">Adicionar ROM</string>
+    <string name="library_empty">Nenhuma ROM encontrada.\n\nCopie seus arquivos .mpn para:\nAndroid/data/com.manedsoftware.wolphun/files/roms/</string>
+    <string name="settings_scale">Escala de vídeo</string>
+    <string name="settings_sound">Som</string>
+    <string name="settings_device">Modelo do aparelho</string>
+    <string name="settings_gamma">Brilho (gamma)</string>
+    <string name="save_state">Salvar estado</string>
+    <string name="load_state">Carregar estado</string>
+    <string name="restart">Reiniciar</string>
+    <string name="close">Fechar</string>
+</resources>
