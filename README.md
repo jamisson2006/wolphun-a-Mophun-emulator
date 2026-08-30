@@ -40,7 +40,8 @@ Two front-ends, one core:
 - ⏱️ **FPS limit down to 1**, and a **"game over" screen** (Restart / Back to library).
 
 **Emulation core & fixes**
-- 🧠 **Core VM fix (long-jump via pool)** — corrected an interpreter bug that made some games crash with an invalid jump; **Football Pro Contest now runs** (and likely other affected titles).
+- 🧠 **Core VM fix (long-jump via pool)** — corrected an interpreter bug that made some games crash with an invalid jump
+
 - 🖌️ **Rendering fixes** — V-Rally 2 opponent-car colors, Honey Cave 2 sprite transparency, and full coverage of all 3D texture formats.
 
 ## ✨ Features
