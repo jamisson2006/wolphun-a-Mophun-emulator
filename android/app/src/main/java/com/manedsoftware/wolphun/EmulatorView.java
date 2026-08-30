@@ -48,6 +48,22 @@ public final class EmulatorView extends SurfaceView implements SurfaceHolder.Cal
     public void importKeypad(String s){ keypad.importLayout(s); }
     public String exportKeypad(){ return keypad.exportLayout(); }
     public void resetKeypad(){ keypad.resetLayout(); }
+    /** mostra/oculta os botões de tecla numérica 2/3 (por jogo — ex.: Bomb Jack). */
+    public void setShowNumbers(boolean on){ keypad.setShowNumbers(on); }
+    /** mostra/oculta o botão ≡ desenhado no canvas (usamos um Button real na Activity). */
+    public void setCanvasMenuVisible(boolean on){ keypad.setMenuVisible(on); }
+
+    /** copia reduzida do ultimo frame renderizado (p/ miniatura/icone). null se ainda nao renderizou. */
+    public Bitmap snapshot(int maxSide){
+        Bitmap f = frame;
+        if(f==null || f.isRecycled()) return null;
+        try {
+            int w=f.getWidth(), h=f.getHeight();
+            float s = Math.min(1f, (float)maxSide/Math.max(w,h));
+            int nw=Math.max(1,Math.round(w*s)), nh=Math.max(1,Math.round(h*s));
+            return Bitmap.createScaledBitmap(f, nw, nh, true);
+        } catch(Throwable t){ return null; }
+    }
 
     public EmulatorView(Context ctx){
         super(ctx);
@@ -95,12 +111,13 @@ public final class EmulatorView extends SurfaceView implements SurfaceHolder.Cal
     }
 
     private void drawFrame(Screen s){
-        int w = s.w, h = s.h;
+        int w = s.pw, h = s.ph;              // dimensoes FISICAS (supersampling HD); a razao de aspecto e a mesma da logica
         if(frame==null || frame.getWidth()!=w || frame.getHeight()!=h){
             frame = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
             src.set(0,0,w,h);
             pixelBuf = new int[w*h];
         }
+        blit.setFilterBitmap(s.rs>1);                     // downscale do buffer HD -> bilinear (anti-aliasing)
         boolean has = s.copyPresented(pixelBuf);          // frame COMPLETO (sem tearing)
         if(has) frame.setPixels(pixelBuf, 0, w, 0, 0, w, h);
 
@@ -113,7 +130,7 @@ public final class EmulatorView extends SurfaceView implements SurfaceHolder.Cal
                 computeDst(c.getWidth(), c.getHeight(), w, h);
                 c.drawBitmap(frame, src, dst, blit);
             }
-            keypad.draw(c, s.getButtons(), menuDown, editMode);
+            keypad.draw(c, s, menuDown, editMode);
         } finally {
             holder.unlockCanvasAndPost(c);
         }
@@ -163,28 +180,37 @@ public final class EmulatorView extends SurfaceView implements SurfaceHolder.Cal
         return true;
     }
 
-    // --- toque no MODO EDIÇÃO: 1 dedo ARRASTA o botão; 2 dedos (pinça) REDIMENSIONAM todos ---
+    // --- toque no MODO EDIÇÃO: 1 dedo ARRASTA (d-pad move como GRUPO; demais individual);
+    //     2 dedos (pinça) REDIMENSIONAM só o botão/grupo tocado ---
+    private VirtualKeypad.Btn scaleTarget;
     private boolean onEditTouch(MotionEvent e){
         switch(e.getActionMasked()){
             case MotionEvent.ACTION_DOWN:
                 dragBtn = keypad.hitButton(e.getX(), e.getY());
                 break;
             case MotionEvent.ACTION_POINTER_DOWN:
-                if(e.getPointerCount()==2){ pinchStartDist = dist(e); pinchStartScale = keypad.getGlobalScale(); dragBtn = null; }
+                if(e.getPointerCount()==2){
+                    float mx=(e.getX(0)+e.getX(1))/2f, my=(e.getY(0)+e.getY(1))/2f;
+                    VirtualKeypad.Btn tgt = keypad.hitButton(mx,my);   // alvo = botão/grupo sob a pinça
+                    if(tgt==null) tgt = dragBtn;
+                    scaleTarget = tgt;
+                    if(scaleTarget!=null){ pinchStartDist = dist(e); pinchStartScale = keypad.startScaleOf(scaleTarget); }
+                    dragBtn = null;
+                }
                 break;
             case MotionEvent.ACTION_MOVE:
-                if(e.getPointerCount()>=2 && pinchStartDist>0){
-                    float d = dist(e); if(d>0) keypad.setGlobalScale(pinchStartScale * d/pinchStartDist);
+                if(e.getPointerCount()>=2 && scaleTarget!=null && pinchStartDist>0){
+                    float d = dist(e); if(d>0) keypad.setScaleOf(scaleTarget, pinchStartScale * d/pinchStartDist);
                 } else if(dragBtn!=null){
                     keypad.moveButton(dragBtn, e.getX(), e.getY());
                 }
                 break;
             case MotionEvent.ACTION_POINTER_UP:
-                pinchStartDist = 0;
+                pinchStartDist = 0; scaleTarget = null;
                 break;
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL:
-                dragBtn = null; pinchStartDist = 0;
+                dragBtn = null; pinchStartDist = 0; scaleTarget = null;
                 break;
         }
         return true;
@@ -199,11 +225,12 @@ public final class EmulatorView extends SurfaceView implements SurfaceHolder.Cal
         int hit = keypad.hitTest(x, y);
         int prev = pointerBit.get(pid, 0);
         if(hit == prev) return;
-        if(prev==VirtualKeypad.MENU) menuDown=false;
-        else if(prev!=0) scr.setButtonBit(prev, false);
+        releaseCode(prev);                                   // solta o botão/tecla anterior
         if(hit==VirtualKeypad.MENU){
             menuDown=true; pointerBit.put(pid, hit);
             if(menuListener!=null) menuListener.onMenu();
+        } else if((hit & VirtualKeypad.KEYPAD_FLAG)!=0){
+            scr.setKeypad(hit & 0xFF, true); pointerBit.put(pid, hit);
         } else if(hit!=0){
             scr.setButtonBit(hit, true); pointerBit.put(pid, hit);
         } else {
@@ -212,9 +239,15 @@ public final class EmulatorView extends SurfaceView implements SurfaceHolder.Cal
     }
 
     private void release(int pid){
-        int prev = pointerBit.get(pid, 0);
-        if(prev==VirtualKeypad.MENU) menuDown=false;
-        else if(prev!=0) scr.setButtonBit(prev, false);
+        releaseCode(pointerBit.get(pid, 0));
         pointerBit.delete(pid);
+    }
+
+    // solta um "código" de botão: MENU, tecla numérica (KEYPAD_FLAG|ascii) ou bit mophun.
+    // MENU=-1 é checado ANTES do KEYPAD_FLAG (pois -1 & KEYPAD_FLAG != 0).
+    private void releaseCode(int code){
+        if(code==VirtualKeypad.MENU) menuDown=false;
+        else if((code & VirtualKeypad.KEYPAD_FLAG)!=0) scr.setKeypad(code & 0xFF, false);
+        else if(code!=0) scr.setButtonBit(code, false);
     }
 }

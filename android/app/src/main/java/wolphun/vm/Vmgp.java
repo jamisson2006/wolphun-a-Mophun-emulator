@@ -38,7 +38,7 @@ public final class Vmgp {
     public Vmgp(byte[] d) {
         this.all = d;
         if (d.length < HEADER_SIZE || d[0]!='V'||d[1]!='M'||d[2]!='G'||d[3]!='P')
-            throw new IllegalArgumentException("Nao e um VMGP valido");
+            throw new IllegalArgumentException("Not a valid VMGP file");
         heapSize  = (u32(d,4) << 2);
         flags     = u16(d,8);
         stackSize = ((long)u16(d,10)) << 2;

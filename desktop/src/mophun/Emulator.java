@@ -39,6 +39,7 @@ public final class Emulator extends JFrame {
         }});
         buildMenu();
         buildBody();
+        applyTheme();                                   // aplica o tema salvo (cores + fonte) antes de dimensionar
         setPreferredSize(new Dimension(760, 500));
         pack();
         setLocationRelativeTo(null);
@@ -53,7 +54,7 @@ public final class Emulator extends JFrame {
         JMenu file = new JMenu(Lang.t("menu.file"));
         JMenuItem setRoot = new JMenuItem(Lang.t("m.setrom"));
         setRoot.addActionListener(e -> chooseRoot());
-        JMenuItem openRom = new JMenuItem("Abrir ROM (.mpn)...");
+        JMenuItem openRom = new JMenuItem(Lang.t("m.openrom"));
         openRom.addActionListener(e -> openSingleRom());
         JMenuItem saveDec = new JMenuItem(Lang.t("m.savedec"));
         saveDec.addActionListener(e -> saveDecryptedRom());
@@ -62,12 +63,21 @@ public final class Emulator extends JFrame {
         file.add(setRoot); file.add(openRom); file.add(saveDec); file.addSeparator(); file.add(exit);
 
         JMenu settings = new JMenu(Lang.t("menu.settings"));
-        JMenuItem video = new JMenuItem("Video...");
+        JMenuItem video = new JMenuItem(Lang.t("m.video"));
         video.addActionListener(e -> videoDialog());
-        JCheckBoxMenuItem sound = new JCheckBoxMenuItem("Som", cfg.sound);
+        // ---- submenu Sound (liga/desliga, soundfont, reverb) ----
+        JMenu soundMenu = new JMenu(Lang.t("menu.sound"));
+        JCheckBoxMenuItem sound = new JCheckBoxMenuItem(Lang.t("m.sound.on"), cfg.sound);
         sound.addActionListener(e -> { cfg.sound = sound.isSelected(); cfg.save(); });
+        JMenuItem soundfont = new JMenuItem(Lang.t("m.soundfont"));
+        soundfont.addActionListener(e -> chooseSoundFont());
+        JCheckBoxMenuItem reverb = new JCheckBoxMenuItem(Lang.t("m.reverb"), cfg.reverb);
+        reverb.addActionListener(e -> { cfg.reverb = reverb.isSelected(); cfg.save(); });
+        soundMenu.add(sound); soundMenu.add(soundfont); soundMenu.add(reverb);
         JMenuItem controls = new JMenuItem(Lang.t("m.controls"));
         controls.addActionListener(e -> controlsDialog());
+        JMenuItem appearance = new JMenuItem(Lang.t("m.appearance"));
+        appearance.addActionListener(e -> appearanceDialog());
         // ---- submenu de idioma ----
         JMenu langMenu = new JMenu(Lang.t("menu.language"));
         ButtonGroup lg = new ButtonGroup();
@@ -77,7 +87,7 @@ public final class Emulator extends JFrame {
             it.addActionListener(e -> setLanguage(idx));
             lg.add(it); langMenu.add(it);
         }
-        settings.add(video); settings.add(sound); settings.add(controls); settings.addSeparator(); settings.add(langMenu);
+        settings.add(video); settings.add(soundMenu); settings.add(controls); settings.add(appearance); settings.addSeparator(); settings.add(langMenu);
 
         JMenu help = new JMenu(Lang.t("menu.help"));
         JMenuItem about = new JMenuItem(Lang.t("m.about"));
@@ -90,7 +100,7 @@ public final class Emulator extends JFrame {
 
     // troca de idioma AO VIVO: aplica, salva, e atualiza os textos visiveis (menu + rotulos + botao)
     void setLanguage(int idx){
-        Lang.cur = idx; cfg.language = Lang.code(); cfg.save();
+        Lang.cur = idx; Lang.applyLocale(); cfg.language = Lang.code(); cfg.save();
         buildMenu();                                   // reconstroi a barra de menus no novo idioma
         searchLabel.setText(Lang.t("lbl.search"));
         versionLabel.setText(Lang.t("lbl.version"));
@@ -167,6 +177,132 @@ public final class Emulator extends JFrame {
         add(split, BorderLayout.CENTER);
     }
 
+    // ---------------- aparencia (tema: cores + fonte) ----------------
+    /** aplica o tema atual (cfg) a esta janela + dialogos, e destaca o botao Jogar com a cor de acento. */
+    void applyTheme(){
+        Theme t = Theme.resolve(cfg);
+        Theme.apply(t, cfg.uiFont, cfg.uiFontSize);
+        if(t!=null){
+            // botao Jogar em destaque (cor de acento)
+            playBtn.setBackground(t.accent);
+            playBtn.setForeground(Theme.contrast(t.accent));
+            playBtn.setOpaque(true);
+            playBtn.setBorderPainted(false);
+            shot.setBorder(BorderFactory.createLineBorder(t.accent.darker()));
+        } else {
+            // "system": devolve o botao Jogar e a borda ao visual nativo
+            playBtn.setBackground(null);
+            playBtn.setForeground(null);
+            playBtn.setOpaque(false);
+            playBtn.setBorderPainted(true);
+            shot.setBorder(BorderFactory.createLineBorder(Color.DARK_GRAY));
+        }
+        revalidate(); repaint();
+    }
+
+    void appearanceDialog(){
+        // snapshot p/ cancelar (restaura tudo se o usuario desistir)
+        final String oT=cfg.theme, oF=cfg.uiFont; final int oSz=cfg.uiFontSize,
+            oBg=cfg.uiBg, oPn=cfg.uiPanel, oFg=cfg.uiFg, oAc=cfg.uiAccent;
+
+        final String[] ids = Theme.ids();
+        final JComboBox<String> themeBox = new JComboBox<String>();
+        for(String id: ids) themeBox.addItem(id);
+        themeBox.setSelectedItem(cfg.theme);
+        themeBox.setRenderer(new DefaultListCellRenderer(){
+            @Override public Component getListCellRendererComponent(JList<?> l,Object v,int i,boolean s,boolean f){
+                super.getListCellRendererComponent(l,v,i,s,f);
+                if(v!=null) setText(Lang.t("theme."+v));
+                return this;
+            }
+        });
+
+        String[] fonts = GraphicsEnvironment.getLocalGraphicsEnvironment().getAvailableFontFamilyNames();
+        java.util.List<String> fam = new java.util.ArrayList<String>();
+        fam.add("SansSerif"); fam.add("Serif"); fam.add("Monospaced");
+        for(String s: fonts) fam.add(s);
+        final JComboBox<String> fontBox = new JComboBox<String>(fam.toArray(new String[0]));
+        fontBox.setSelectedItem(cfg.uiFont);
+        final JSpinner sizeSp = new JSpinner(new SpinnerNumberModel(cfg.uiFontSize, 9, 28, 1));
+
+        // botoes de cor (swatches) — marcados p/ o tema NAO os repintar (mantem a cor verdadeira)
+        final JButton bgBtn = new JButton(), pnBtn = new JButton(), fgBtn = new JButton(), acBtn = new JButton();
+        for(JButton b : new JButton[]{bgBtn,pnBtn,fgBtn,acBtn}) b.putClientProperty("themeSwatch", Boolean.TRUE);
+
+        // aplica o estado atual do dialogo no cfg + na tela (ao vivo)
+        final Runnable live = new Runnable(){ public void run(){
+            String id = (String)themeBox.getSelectedItem();
+            cfg.theme = id;
+            boolean custom = "custom".equals(id);
+            Theme preview = Theme.byId(id, cfg);
+            // decide as cores que os 4 swatches devem MOSTRAR
+            Color c0,c1,c2,c3;
+            if(custom){
+                c0=new Color(colorOf(bgBtn)); c1=new Color(colorOf(pnBtn)); c2=new Color(colorOf(fgBtn)); c3=new Color(colorOf(acBtn));
+                cfg.uiBg=colorOf(bgBtn); cfg.uiPanel=colorOf(pnBtn); cfg.uiFg=colorOf(fgBtn); cfg.uiAccent=colorOf(acBtn);
+            } else if(preview!=null){
+                c0=preview.bg; c1=preview.panel; c2=preview.fg; c3=preview.accent;
+                fontBox.setSelectedItem(preview.font);
+            } else { // system: swatches neutros
+                c0=new Color(0x2E2C34); c1=new Color(0x2E2C34); c2=new Color(0xF0EDE6); c3=new Color(0xE8451F);
+            }
+            cfg.uiFont = (String)fontBox.getSelectedItem();
+            cfg.uiFontSize = (Integer)sizeSp.getValue();
+            applyTheme();
+            // re-afirma os swatches DEPOIS de aplicar o tema (o updateComponentTreeUI reseta cores;
+            // como sao 'themeSwatch' o applyTree os ignora, entao restauramos aqui com texto de contraste)
+            setBtnColor(bgBtn,c0); setBtnColor(pnBtn,c1); setBtnColor(fgBtn,c2); setBtnColor(acBtn,c3);
+        }};
+
+        // cores iniciais dos swatches
+        Theme init = Theme.byId(cfg.theme, cfg);
+        if("custom".equals(cfg.theme)){ setBtnColor(bgBtn,new Color(cfg.uiBg)); setBtnColor(pnBtn,new Color(cfg.uiPanel)); setBtnColor(fgBtn,new Color(cfg.uiFg)); setBtnColor(acBtn,new Color(cfg.uiAccent)); }
+        else if(init!=null){ setBtnColor(bgBtn,init.bg); setBtnColor(pnBtn,init.panel); setBtnColor(fgBtn,init.fg); setBtnColor(acBtn,init.accent); }
+        else { setBtnColor(bgBtn,new Color(0x2E2C34)); setBtnColor(pnBtn,new Color(0x2E2C34)); setBtnColor(fgBtn,new Color(0xF0EDE6)); setBtnColor(acBtn,new Color(0xE8451F)); }
+
+        // ao clicar num swatch: abre o seletor de cor, entra no modo custom e aplica ao vivo
+        final JButton[] sw = { bgBtn, pnBtn, fgBtn, acBtn };
+        final String[] swTitle = { Lang.t("ap.bg"), Lang.t("ap.panel"), Lang.t("ap.text"), Lang.t("ap.accent") };
+        for(int i=0;i<sw.length;i++){ final JButton b=sw[i]; final String title=swTitle[i];
+            b.addActionListener(new ActionListener(){ public void actionPerformed(ActionEvent e){
+                Color c = JColorChooser.showDialog(Emulator.this, title, b.getBackground());
+                if(c==null) return;
+                setBtnColor(b, c);
+                if(!"custom".equals(themeBox.getSelectedItem())) themeBox.setSelectedItem("custom"); // dispara live (le os 4 swatches)
+                else live.run();
+            }});
+        }
+
+        themeBox.addActionListener(e -> live.run());
+        fontBox.addActionListener(e -> live.run());
+        sizeSp.addChangeListener(e -> live.run());
+
+        JPanel p = new JPanel(new GridLayout(0,2,6,6));
+        p.add(new JLabel(Lang.t("ap.theme")));  p.add(themeBox);
+        p.add(new JLabel(Lang.t("ap.font")));   p.add(fontBox);
+        p.add(new JLabel(Lang.t("ap.size")));   p.add(sizeSp);
+        p.add(new JLabel(Lang.t("ap.bg")));     p.add(bgBtn);
+        p.add(new JLabel(Lang.t("ap.panel")));  p.add(pnBtn);
+        p.add(new JLabel(Lang.t("ap.text")));   p.add(fgBtn);
+        p.add(new JLabel(Lang.t("ap.accent"))); p.add(acBtn);
+        int r = JOptionPane.showConfirmDialog(this, p, Lang.t("dlg.appearance"),
+            JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+        if(r==JOptionPane.OK_OPTION){
+            live.run(); cfg.save();
+        } else {
+            // cancelar: restaura tudo e re-aplica o tema anterior
+            cfg.theme=oT; cfg.uiFont=oF; cfg.uiFontSize=oSz; cfg.uiBg=oBg; cfg.uiPanel=oPn; cfg.uiFg=oFg; cfg.uiAccent=oAc;
+            applyTheme();
+        }
+    }
+    // helpers de cor p/ os botoes-swatch
+    static int colorOf(JButton b){ Color c=b.getBackground(); return c!=null? (c.getRGB()&0xFFFFFF) : 0; }
+    static void setBtnColor(JButton b, Color c){
+        b.setBackground(c); b.setOpaque(true); b.setBorderPainted(true);
+        b.setText("  #"+String.format("%06X", c.getRGB()&0xFFFFFF)+"  ");
+        b.setForeground(Theme.contrast(c));
+    }
+
     // ---------------- biblioteca ----------------
     void reloadLibrary(){
         File root = cfg.gamesRoot!=null ? new File(cfg.gamesRoot) : null;
@@ -176,8 +312,8 @@ public final class Emulator extends JFrame {
         if(games.isEmpty() && root==null){
             SwingUtilities.invokeLater(() -> {
                 int r = JOptionPane.showConfirmDialog(this,
-                    "Nenhuma pasta de ROMs definida. Deseja selecionar agora?",
-                    "Biblioteca vazia", JOptionPane.YES_NO_OPTION);
+                    Lang.t("lib.emptyask"),
+                    Lang.t("lib.emptytitle"), JOptionPane.YES_NO_OPTION);
                 if(r==JOptionPane.YES_OPTION) chooseRoot();
             });
         }
@@ -192,7 +328,7 @@ public final class Emulator extends JFrame {
     void showSelected(){
         Game g = list.getSelectedValue();
         variantBox.removeAllItems();
-        if(g==null){ shot.setIcon(null); shot.setText("(selecione um jogo)"); info.setText(""); playBtn.setEnabled(false); return; }
+        if(g==null){ shot.setIcon(null); shot.setText(Lang.t("msg.selgame")); info.setText(""); playBtn.setEnabled(false); return; }
         playBtn.setEnabled(true);
         info.setText(g.name);
         for(File v: g.variants) variantBox.addItem(v);
@@ -208,17 +344,17 @@ public final class Emulator extends JFrame {
         loadShot(g.screenshot);
     }
     void loadShot(File f){
-        if(f==null || !f.isFile()){ shot.setIcon(null); shot.setText("(sem screenshot)"); return; }
+        if(f==null || !f.isFile()){ shot.setIcon(null); shot.setText(Lang.t("msg.noshot")); return; }
         try {
             java.awt.image.BufferedImage im = javax.imageio.ImageIO.read(f);
-            if(im==null){ shot.setIcon(null); shot.setText("(sem screenshot)"); return; }
+            if(im==null){ shot.setIcon(null); shot.setText(Lang.t("msg.noshot")); return; }
             int maxW=270, maxH=250;
             double sc = Math.min((double)maxW/im.getWidth(), (double)maxH/im.getHeight());
             if(sc>4) sc=4;   // pixel art: nao ampliar demais
             int w=(int)(im.getWidth()*sc), h=(int)(im.getHeight()*sc);
             Image scaled = im.getScaledInstance(w,h, Image.SCALE_FAST);
             shot.setText(null); shot.setIcon(new ImageIcon(scaled));
-        } catch(Exception ex){ shot.setIcon(null); shot.setText("(erro na imagem)"); }
+        } catch(Exception ex){ shot.setIcon(null); shot.setText(Lang.t("img.error")); }
     }
 
     void launchSelected(){
@@ -234,26 +370,21 @@ public final class Emulator extends JFrame {
             if(cached!=null){
                 mpn = cached;                       // ja descriptografado antes -> sem perguntar de novo
             } else {
-                Object[] opts = {"Descriptografar e jogar","Cancelar"};
+                Object[] opts = {Lang.t("dec.playbtn"),Lang.t("btn.cancel")};
                 int r = JOptionPane.showOptionDialog(this,
-                    "'"+g.name+"' esta CRIPTOGRAFADO (DRM mophun).\n" +
-                    "Deseja descriptografar agora para jogar normalmente?\n\n" +
-                    "A copia descriptografada fica em cache e sera REUTILIZADA nas proximas\n" +
-                    "vezes (esta tela nao aparece de novo). O .mpn original NAO e alterado.\n" +
-                    "Para uma copia permanente, use Arquivo > Salvar ROM descriptografado.",
-                    "ROM criptografado", JOptionPane.DEFAULT_OPTION, JOptionPane.QUESTION_MESSAGE, null, opts, opts[0]);
+                    Lang.t("dec.encmsg", g.name),
+                    Lang.t("dec.enctitle"), JOptionPane.DEFAULT_OPTION, JOptionPane.QUESTION_MESSAGE, null, opts, opts[0]);
                 if(r!=0) return;
                 File dec;
                 try { dec = MophunCrypt.ensureDecrypted(mpn); }
                 catch(Throwable t){
-                    JOptionPane.showMessageDialog(this, "Falha ao descriptografar:\n"+t, "Erro", JOptionPane.ERROR_MESSAGE);
+                    JOptionPane.showMessageDialog(this, Lang.t("dec.fail")+"\n"+t, Lang.t("dlg.error"), JOptionPane.ERROR_MESSAGE);
                     return;
                 }
                 if(dec==null){
                     JOptionPane.showMessageDialog(this,
-                        "Nao foi possivel descriptografar '"+g.name+"'.\n" +
-                        "Nenhuma chave RSA embutida corresponde (talvez nao seja um jogo Sony Ericsson).",
-                        "Sem chave compativel", JOptionPane.WARNING_MESSAGE);
+                        Lang.t("dec.nokeymsg", g.name),
+                        Lang.t("dec.nokeytitle"), JOptionPane.WARNING_MESSAGE);
                     return;
                 }
                 mpn = dec;
@@ -266,16 +397,39 @@ public final class Emulator extends JFrame {
             activeGame = new GameWindow(cfg, mpn, g.name, new Runnable(){ public void run(){ self.setVisible(true); activeGame=null; } });
         } catch(Throwable ex){
             setVisible(true);
-            JOptionPane.showMessageDialog(this, "Nao foi possivel iniciar '"+g.name+"':\n"+ex,
-                "Erro ao iniciar", JOptionPane.ERROR_MESSAGE);
+            // detecta o erro tipico de container invalido/criptografado e mostra msg amigavel localizada,
+            // em vez da excecao crua em ingles (antes vazava "Nao e um VMGP valido" em PT).
+            Throwable root = ex; while(root.getCause()!=null) root = root.getCause();
+            boolean notVmgp = (root instanceof IllegalArgumentException)
+                && root.getMessage()!=null && root.getMessage().toLowerCase().contains("vmgp");
+            String detail = notVmgp ? Lang.t("err.notvmgp") : String.valueOf(ex);
+            JOptionPane.showMessageDialog(this, Lang.t("err.cantstart", g.name)+"\n\n"+detail,
+                Lang.t("err.starttitle"), JOptionPane.ERROR_MESSAGE);
         }
     }
 
     // ---------------- acoes de menu ----------------
+    // escolhe um .sf2 customizado p/ o MIDI (Gervill), ou volta ao synth padrao do SO.
+    // Vale a partir do PROXIMO jogo aberto (o Sdk le cfg.soundFont ao iniciar a sessao).
+    void chooseSoundFont(){
+        String cur = cfg.soundFont!=null ? new File(cfg.soundFont).getName() : Lang.t("sf.default");
+        Object[] opts = {Lang.t("sf.choose"), Lang.t("sf.usedefault"), Lang.t("btn.cancel")};
+        int r = JOptionPane.showOptionDialog(this, Lang.t("sf.current")+" "+cur, Lang.t("m.soundfont"),
+            JOptionPane.DEFAULT_OPTION, JOptionPane.QUESTION_MESSAGE, null, opts, opts[0]);
+        if(r==0){
+            JFileChooser fc = new JFileChooser(cfg.soundFont!=null? new File(cfg.soundFont).getParentFile() : null);
+            fc.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("SoundFont (*.sf2)","sf2"));
+            if(fc.showOpenDialog(this)==JFileChooser.APPROVE_OPTION){
+                cfg.soundFont = fc.getSelectedFile().getAbsolutePath(); cfg.save();
+                JOptionPane.showMessageDialog(this, Lang.t("sf.applied"));
+            }
+        } else if(r==1){ cfg.soundFont = null; cfg.save(); JOptionPane.showMessageDialog(this, Lang.t("sf.applied")); }
+    }
+
     void chooseRoot(){
         JFileChooser fc = new JFileChooser(cfg.gamesRoot!=null? new File(cfg.gamesRoot) : null);
         fc.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
-        fc.setDialogTitle("Selecione a pasta com as ROMs mophun");
+        fc.setDialogTitle(Lang.t("m.selromtitle"));
         if(fc.showOpenDialog(this)==JFileChooser.APPROVE_OPTION){
             cfg.gamesRoot = fc.getSelectedFile().getAbsolutePath();
             cfg.save();
@@ -294,39 +448,37 @@ public final class Emulator extends JFrame {
     // descriptografa o jogo selecionado permanentemente (copia ou substitui original)
     void saveDecryptedRom(){
         Game g = list.getSelectedValue();
-        if(g==null){ JOptionPane.showMessageDialog(this,"Selecione um jogo primeiro."); return; }
+        if(g==null){ JOptionPane.showMessageDialog(this,Lang.t("dec.selfirst")); return; }
         final File src = g.mpn;
         if(!GameLibrary.looksEncrypted(src)){
-            JOptionPane.showMessageDialog(this, "'"+g.name+"' ja esta descriptografado.", "Nada a fazer", JOptionPane.INFORMATION_MESSAGE);
+            JOptionPane.showMessageDialog(this, Lang.t("dec.already", g.name), Lang.t("dec.nothing"), JOptionPane.INFORMATION_MESSAGE);
             return;
         }
-        Object[] opts = {"Salvar copia...","Substituir original","Cancelar"};
+        Object[] opts = {Lang.t("dec.optcopy"),Lang.t("dec.optreplace"),Lang.t("btn.cancel")};
         int r = JOptionPane.showOptionDialog(this,
-            "Descriptografar '"+g.name+"' permanentemente (nao passa mais pela tela de descriptografia):\n\n" +
-            "• Salvar copia: grava um .mpn descriptografado onde voce escolher.\n" +
-            "• Substituir original: sobrescreve o arquivo .mpn original (irreversivel).",
-            "Salvar ROM descriptografado", JOptionPane.DEFAULT_OPTION, JOptionPane.QUESTION_MESSAGE, null, opts, opts[0]);
+            Lang.t("dec.permmsg", g.name),
+            Lang.t("dec.savetitle"), JOptionPane.DEFAULT_OPTION, JOptionPane.QUESTION_MESSAGE, null, opts, opts[0]);
         try {
             if(r==0){                                   // salvar copia
                 JFileChooser fc = new JFileChooser(src.getParentFile());
-                fc.setDialogTitle("Salvar .mpn descriptografado como");
+                fc.setDialogTitle(Lang.t("dec.saveas"));
                 fc.setSelectedFile(new File(src.getParentFile(), GameLibrary.stripExt(src.getName())+"_decrypted.mpn"));
                 if(fc.showSaveDialog(this)!=JFileChooser.APPROVE_OPTION) return;
                 if(MophunCrypt.decryptTo(src, fc.getSelectedFile()))
-                    JOptionPane.showMessageDialog(this, "Salvo:\n"+fc.getSelectedFile().getAbsolutePath());
-                else JOptionPane.showMessageDialog(this, "Sem chave RSA compativel.", "Falha", JOptionPane.WARNING_MESSAGE);
+                    JOptionPane.showMessageDialog(this, Lang.t("dec.saved")+"\n"+fc.getSelectedFile().getAbsolutePath());
+                else JOptionPane.showMessageDialog(this, Lang.t("dec.nokeyrsa"), Lang.t("dlg.fail"), JOptionPane.WARNING_MESSAGE);
             } else if(r==1){                            // substituir original (destrutivo)
                 int c = JOptionPane.showConfirmDialog(this,
-                    "Isto vai SOBRESCREVER o arquivo original:\n"+src.getAbsolutePath()+"\n\nConfirmar?",
-                    "Substituir original", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+                    Lang.t("dec.overwritemsg", src.getAbsolutePath()),
+                    Lang.t("dec.optreplace"), JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
                 if(c!=JOptionPane.YES_OPTION) return;
                 if(MophunCrypt.decryptTo(src, src)){
                     reloadLibrary();
-                    JOptionPane.showMessageDialog(this, "Original substituido pela versao descriptografada.");
-                } else JOptionPane.showMessageDialog(this, "Sem chave RSA compativel.", "Falha", JOptionPane.WARNING_MESSAGE);
+                    JOptionPane.showMessageDialog(this, Lang.t("dec.replaced"));
+                } else JOptionPane.showMessageDialog(this, Lang.t("dec.nokeyrsa"), Lang.t("dlg.fail"), JOptionPane.WARNING_MESSAGE);
             }
         } catch(Throwable t){
-            JOptionPane.showMessageDialog(this, "Erro: "+t, "Erro", JOptionPane.ERROR_MESSAGE);
+            JOptionPane.showMessageDialog(this, Lang.t("dlg.error")+": "+t, Lang.t("dlg.error"), JOptionPane.ERROR_MESSAGE);
         }
     }
 
@@ -334,6 +486,8 @@ public final class Emulator extends JFrame {
         final JSpinner scaleSp = new JSpinner(new SpinnerNumberModel(cfg.scale,1,8,1));
         final JSpinner fpsSp   = new JSpinner(new SpinnerNumberModel(cfg.targetFps,10,120,5));
         final JSpinner gammaSp = new JSpinner(new SpinnerNumberModel(cfg.gamma,0.40,1.00,0.05));
+        final JSpinner fontSp  = new JSpinner(new SpinnerNumberModel(cfg.fontScale,1.00,2.50,0.10));
+        final JSpinner hdSp    = new JSpinner(new SpinnerNumberModel(cfg.renderScale,1,4,1));
         String[] presets = {"101 x 80","128 x 128","128 x 160","176 x 208","176 x 220","208 x 208","208 x 320","240 x 320"};
         final JComboBox<String> resBox = new JComboBox<String>(presets);
         resBox.setEditable(true);
@@ -351,10 +505,14 @@ public final class Emulator extends JFrame {
         p.add(new JLabel(Lang.t("lbl.scale")));  p.add(scaleSp);
         p.add(new JLabel(Lang.t("lbl.fps")));    p.add(fpsSp);
         p.add(new JLabel(Lang.t("lbl.gamma")));  p.add(gammaSp);
+        p.add(new JLabel(Lang.t("lbl.fontsize"))); p.add(fontSp);
+        p.add(new JLabel(Lang.t("lbl.hd")));     p.add(hdSp);
         if(JOptionPane.showConfirmDialog(this,p,Lang.t("dlg.video"),JOptionPane.OK_CANCEL_OPTION,JOptionPane.PLAIN_MESSAGE)==JOptionPane.OK_OPTION){
             cfg.scale = (Integer)scaleSp.getValue();
             cfg.targetFps = (Integer)fpsSp.getValue();
             cfg.gamma = ((Number)gammaSp.getValue()).doubleValue();
+            cfg.fontScale = ((Number)fontSp.getValue()).doubleValue();
+            cfg.renderScale = (Integer)hdSp.getValue();
             cfg.deviceModel = modelBox.getSelectedIndex();
             int[] wh = parseRes((String)resBox.getSelectedItem());
             if(wh!=null){ cfg.width=wh[0]; cfg.height=wh[1]; }
@@ -370,7 +528,7 @@ public final class Emulator extends JFrame {
 
     // formata uma lista de VKs como "↑, W, Num 8"
     static String keysText(java.util.List<Integer> vks){
-        if(vks==null || vks.isEmpty()) return "(nenhuma)";
+        if(vks==null || vks.isEmpty()) return Lang.t("keys.none");
         StringBuilder b = new StringBuilder();
         for(int i=0;i<vks.size();i++){ if(i>0) b.append(", "); b.append(KeyEvent.getKeyText(vks.get(i))); }
         return b.toString();
@@ -415,7 +573,7 @@ public final class Emulator extends JFrame {
             b.addActionListener(new ActionListener(){ public void actionPerformed(ActionEvent e){
                 stopCap[0].run();                                  // fecha captura anterior
                 capturing[0]=action; b.setBackground(CAP);
-                b.setText("["+keysText(temp.get(action))+"]  (Esc termina)");
+                b.setText("["+keysText(temp.get(action))+"]  "+Lang.t("ctrl.esc"));
             }});
             JButton clr = new JButton(Lang.t("btn.clear")); clr.setFocusable(false);
             clr.addActionListener(new ActionListener(){ public void actionPerformed(ActionEvent e){
@@ -440,10 +598,7 @@ public final class Emulator extends JFrame {
         JButton cancel = new JButton(Lang.t("btn.cancel"));
         cancel.addActionListener(new ActionListener(){ public void actionPerformed(ActionEvent e){ stopCap[0].run(); dlg.dispose(); }});
         JPanel south = new JPanel(); south.add(def); south.add(cancel); south.add(ok);
-        JLabel hint = new JLabel("<html>Clique num botao (fica <b>amarelo</b>) e tecle p/ <b>adicionar</b> (tecle de novo p/ remover). "
-            +"Funciona com <b>Espaco, Enter, numpad, setas</b> — qualquer tecla. <b>Esc</b> termina a captura.<br>"
-            +"Nos menus: <b>Fire / OK</b> (Espaco/Enter) <b>ESCOLHE</b> o item. A softkey <b>Select</b> = menu / voltar / "
-            +"<b>sair</b> (no menu principal sai do jogo -> volta a biblioteca). <b>Fire2</b> = 2a acao.</html>");
+        JLabel hint = new JLabel(Lang.t("ctrl.hint"));
         hint.setBorder(BorderFactory.createEmptyBorder(8,10,0,10));
         dlg.getContentPane().add(hint, BorderLayout.NORTH);
         dlg.getContentPane().add(grid, BorderLayout.CENTER);
@@ -462,6 +617,9 @@ public final class Emulator extends JFrame {
             File guess = new File("C:/Users/tavar/Downloads/Mophun_Archive_2.1/Games_SE");
             if(guess.isDirectory()){ cfg.gamesRoot = guess.getAbsolutePath(); cfg.save(); }
         }
-        SwingUtilities.invokeLater(new Runnable(){ public void run(){ new Emulator(cfg); } });
+        SwingUtilities.invokeLater(new Runnable(){ public void run(){
+            Theme.setUIManager(Theme.resolve(cfg), cfg.uiFont, cfg.uiFontSize);   // dialogos ja nascem no tema
+            new Emulator(cfg);
+        } });
     }
 }

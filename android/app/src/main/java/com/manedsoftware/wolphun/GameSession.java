@@ -20,7 +20,14 @@ public final class GameSession {
     Vmgp exe; Pip2 vm; Sdk sdk; Screen scr;
     Thread thread;
     volatile boolean running=false, paused=false, parked=false;
+    volatile boolean userStopped=false;   // true = paramos nos (stop()); false = o jogo saiu sozinho
+    public int forceModel = -1;           // resolucao forcada por jogo (indice de modelo); -1 = auto (detecta)
     public volatile String error=null;
+
+    /** avisado quando o jogo SAI SOZINHO (softkey 'sair'/Quit ou fim de task) — nao no stop() manual. */
+    public interface EndListener { void onGameEnded(); }
+    volatile EndListener endListener;
+    public void setEndListener(EndListener l){ this.endListener = l; }
 
     public GameSession(File mpn, String gameName, PrefsConfig cfg, File saveDir){
         this.mpnFile=mpn; this.gameName=gameName; this.cfg=cfg; this.saveDir=saveDir;
@@ -28,22 +35,35 @@ public final class GameSession {
 
     public void init() throws Exception {
         exe = Vmgp.load(mpnFile.getAbsolutePath());
-        int model = PrefsConfig.detectModel(mpnFile.getName());
-        int w, h;
-        if(model>=0){ int[] r = PrefsConfig.resForModel(model); w=r[0]; h=r[1]; }
-        else { model = cfg.deviceModel; w=cfg.width; h=cfg.height; }
+        // deteccao automatica de perfil por jogo: 1) tag de modelo ([T610]/[7650]...);
+        // 2) tag de resolucao [LxA] (ex.: [176x208]) -> modelo canonico; 3) default do usuario.
+        int model; int w, h;
+        if(forceModel>=0){                                  // override de resolucao POR JOGO (menu da biblioteca)
+            model = forceModel; int[] r = PrefsConfig.resForModel(model); w=r[0]; h=r[1];
+        } else {
+            model = PrefsConfig.detectModel(mpnFile.getName());
+            if(model>=0){ int[] r = PrefsConfig.resForModel(model); w=r[0]; h=r[1]; }
+            else {
+                int[] res = PrefsConfig.detectRes(mpnFile.getName());
+                if(res!=null){ w=res[0]; h=res[1]; int canon=PrefsConfig.modelForRes(w,h); model=(canon>=0)?canon:cfg.deviceModel; }
+                else { model = cfg.deviceModel; w=cfg.width; h=cfg.height; }
+            }
+        }
 
-        scr = new Screen(w, h, cfg.scale);
+        scr = new Screen(w, h, cfg.scale, cfg.renderScale);   // renderScale = supersampling HD
         scr.targetFps = cfg.targetFps;
         scr.gamma = cfg.gamma;
+        scr.setFontScale(cfg.fontScale);
 
         vm  = new Pip2(exe, 4*1024*1024, 256*1024);
         sdk = new Sdk(vm, scr);
         sdk.soundEnabled = cfg.sound;
+        sdk.reverb       = cfg.reverb;
         sdk.deviceModel  = model;
         sdk.deviceVendor = PrefsConfig.vendorForModel(model);
         sdk.saveDir = saveDir;
         vm.sdk = sdk;
+        vm.runConstructors();   // construtores globais C++ ("~C") antes do main (ex.: HC1 inicializa entidades/sprites)
     }
 
     public Screen getScreen(){ return scr; }
@@ -74,7 +94,9 @@ public final class GameSession {
             t.printStackTrace();
         } finally {
             running=false;
-            stopSound();
+            disposeAudio();          // fim do jogo -> teardown completo do audio
+            // o jogo terminou por conta propria (nao foi stop() manual) -> avisa a Activity p/ oferecer Reiniciar/Biblioteca
+            if(!userStopped){ EndListener l = endListener; if(l!=null) try { l.onGameEnded(); } catch(Throwable t){} }
         }
     }
 
@@ -96,11 +118,15 @@ public final class GameSession {
     }
 
     public void stop(){
+        userStopped=true;
         running=false;
         if(vm!=null) vm.stopped=true;
         if(thread!=null) thread.interrupt();
         try { if(sdk!=null) sdk.flushSaves(); } catch(Throwable t){}
-        stopSound();
+        disposeAudio();
     }
+    // pausa: silencia o som mas MANTEM o motor vivo (senao fica mudo p/ sempre depois de pausar)
     void stopSound(){ try { if(sdk!=null) sdk.stopSound(); } catch(Throwable t){} }
+    // teardown completo do audio (fim/destruir)
+    void disposeAudio(){ try { if(sdk!=null) sdk.disposeAudio(); } catch(Throwable t){} }
 }

@@ -28,6 +28,33 @@ public final class Renderer3D {
     int cullMode = 2;                     // DEFAULT = CounterClockwise (nofun ClientState.cs) -> backface culling LIGADO
     boolean textureMode = false;
     boolean transp3d = false;            // TransparentEnable (state 15): indice 0 da textura = transparente
+    // --- render states VMGP3D honrados (defaults escolhidos p/ = comportamento anterior; sem regressao) ---
+    int shadeMode = 2;                   // state 7:  1=FLAT, 2=GOURAUD (default)
+    int texBlendMode = 1;                // state 11: 1=DECAL/REPLACE (default), 2=MODULATE, 4=ADD
+    int colorBlend = 0;                  // state 20: 0=REPLACE (opaco, default),1=ALPHAADD,2=ALPHA,3=MODULATE
+    boolean alphaEnable = false;         // state 12: habilita blending pelo alpha difuso do vertice
+    int wrapMode = 1;                    // state 14: 1=WRAP (default), 2=CLAMP, 4=MIRROR
+    boolean zEnable = true;              // state 4:  z-buffer on (default)
+    int zFunc = 2;                       // state 5:  2=LESS (default)
+    boolean fogEnable = false;           // state 8
+    int fogMode = 1;                     // state 22: 0=EXP, 1=LINEAR
+    int fogColor = 0x000000;             // state 21 / vSetFogColor (RGB888)
+    float fogStart = 0f, fogEnd = 1f, fogDensity = 0f;  // states 23,24,25 (fixed->float)
+    boolean lightingEnable = false;      // state 17
+    boolean specularEnable = false;      // state 16
+
+    // --- iluminacao T&L (VMGP3D). So aplicada quando LIGHTINGENABLE (state 17); default off -> sem efeito. ---
+    static final int MAXL = 8;
+    int ambientScene = 0;                // vSetAmbientLight (RGB888)
+    // cada luz: [type, px,py,pz, dx,dy,dz, r,g,b, sr,sg,sb, range(1/range), exponent, cutoff]
+    final float[][] lights = new float[MAXL][];
+    // material (componentes 0..255; shininess em float)
+    int matDiffR=255,matDiffG=255,matDiffB=255;
+    int matSpecR=0,matSpecG=0,matSpecB=0;
+    int matEmR=0,matEmG=0,matEmB=0;
+    int matAmbR=255,matAmbG=255,matAmbB=255;
+    float matShininess=4f;
+    float camX=0,camY=0,camZ=0;          // vSetCameraPos (para specular)
     static final boolean NOCULL = System.getenv("NOCULL")!=null;      // TESTE A/B: desliga backface culling
     static final boolean NOTRANSP = System.getenv("NOTRANSP")!=null;  // TESTE A/B: desliga transparencia 3D
     int texturePtr = 0, textureFormat = 0, textureW = 0, textureH = 0;
@@ -50,6 +77,7 @@ public final class Renderer3D {
 
     public int vMul(int a,int b){ return (int)(((long)a*b) >> 14); }
     public int vDiv(int a,int b){ return b==0?0:(int)(((long)a<<14)/b); }
+    public int vPow(int val,int exp){ return ff((float)Math.pow(f2f(val), exp&0xff)); }
     public int vSqrt(int v){ return ff((float)Math.sqrt(f2f(v))); }
     public int vSin(int v){ return ff((float)Math.sin(ang2rad(v))); }
     public int vCos(int v){ return ff((float)Math.cos(ang2rad(v))); }
@@ -81,6 +109,10 @@ public final class Renderer3D {
         float[][] pts={{mnx,mny,mnz},{mnx,mny,mxz},{mxx,mny,mxz},{mxx,mny,mnz},{mxx,mxy,mxz},{mxx,mxy,mnz},{mnx,mxy,mnz},{mnx,mxy,mxz}};
         float[][] cl=new float[8][4];
         for(int i=0;i<8;i++) xform(pv, pts[i][0],pts[i][1],pts[i][2],1f, cl[i]);
+        // caixa que ATRAVESSA a camera (algum canto em/atras do near, w<=0): o teste -w<=coord<=w e
+        // instavel com w negativo e pode CULAR por engano uma chunk em que estamos entrando -> geometria
+        // do mapa "some ao mover". Nesse caso nao culamos (o rasterizador ja recorta no near). So reduz culling.
+        for(int i=0;i<8;i++) if(cl[i][3] <= 1e-4f){ frustumVis++; return 1; }
         for(int c=0;c<3;c++){
             boolean in=false; for(int i=0;i<8;i++) if(cl[i][c] > -cl[i][3]){ in=true; break; } if(!in){ frustumCull++; return 0; }
             in=false;        for(int i=0;i<8;i++) if(cl[i][c] <  cl[i][3]){ in=true; break; } if(!in){ frustumCull++; return 0; }
@@ -121,6 +153,35 @@ public final class Renderer3D {
                 vm.write32(d,(int)(px*16)); vm.write32(d+4,(int)(py*16)); vm.write32(d+8,ff(pz)); vm.write32(d+12,ff(o[3])); } } }
     // vMatrixInvert: current = inversa(current)
     public void matrixInvert(){ float[] inv=invert4x4(current); if(inv!=null) current=inv; }
+    public void matrixTranspose(){ float[] t=new float[16];
+        for(int r=0;r<4;r++) for(int c=0;c<4;c++) t[c*4+r]=current[r*4+c]; current=t; }
+    // multiplica so os componentes de rotacao (3x3) da matriz atual pela matriz especificada
+    public void matrixMultiply3x3(int ptr){ float[] m=readMatrix(ptr); float[] r3=ident();
+        for(int r=0;r<3;r++) for(int c=0;c<3;c++) r3[r*4+c]=m[r*4+c]; current=mul(current,r3); }
+    // vGetInteger: consulta um estado interno estatico (capabilities do renderer de software)
+    public int getInteger(int param){
+        switch(param){
+            case 1: return 8;        // MAX_LIGHTS
+            case 2: return 4096;     // MAX_VERTICES (recomendado)
+            case 3: return 256;      // MAX_TEXTURE_SIZE
+            case 4: return 4096;     // MAX_TEXTURE_COUNT
+            case 5: return 1<<20;    // TEXTURE_CACHE_SIZE (bytes)
+            case 6: return 16;       // DEPTH_BITS (temos z-buffer)
+            default: return 0;
+        }
+    }
+    // le o z-buffer (0 se fora do clip-window); depth [0,1] -> uint16
+    public int getZBufferValue(int x,int y){
+        if(zbuf==null||x<scr.clipX0||x>=scr.clipX1||y<scr.clipY0||y>=scr.clipY1) return 0;
+        float d=zbuf[(y*scr.rs)*zW+(x*scr.rs)]; if(d==Float.MAX_VALUE) return 0;
+        int v=(int)(d*65535f); return v<0?0:(v>65535?65535:v);
+    }
+    public void vectorArrayAdd(int d,int s1,int s2,int count){ for(int i=0;i<count;i++) vectorAdd(d+i*12,s1+i*12,s2+i*12); }
+    // vVectorArrayDelta: d = (s2 - s1) / steps ; low16=nr de vetores, high16=steps
+    public void vectorArrayDelta(int d,int s1,int s2,int param){
+        int count=param&0xffff, steps=(param>>>16); if(steps==0) steps=1;
+        for(int i=0;i<count;i++){ int a=s1+i*12,b=s2+i*12,o=d+i*12;
+            putV(o, (vx(b)-vx(a))/steps, (vy(b)-vy(a))/steps, (vz(b)-vz(a))/steps); } }
     static float[] invert4x4(float[] m){
         float[] inv=new float[16];
         inv[0]=m[5]*m[10]*m[15]-m[5]*m[11]*m[14]-m[9]*m[6]*m[15]+m[9]*m[7]*m[14]+m[13]*m[6]*m[11]-m[13]*m[7]*m[10];
@@ -298,13 +359,61 @@ public final class Renderer3D {
     public void setViewport(int l,int t,int w,int h){ vpL=l; vpT=t; vpW=w; vpH=h; }
     public void setRenderState(int state,int value){
         switch(state){
-            case 6:  cullMode=value; break;            // CullMode
-            case 9:  textureMode=(value!=0); break;    // TextureEnable
-            case 15: transp3d=(value!=0); break;       // TransparentEnable (indice 0 transparente)
+            case 4:  zEnable=(value!=0); break;        // ZENABLE
+            case 5:  zFunc=value; break;               // ZFUNCTION
+            case 6:  cullMode=value; break;            // CULLMODE
+            case 7:  shadeMode=value; break;           // SHADEMODE (flat/gouraud)
+            case 8:  fogEnable=(value!=0); break;      // FOGENABLE
+            case 9:  textureMode=(value!=0); break;    // TEXTUREENABLE
+            case 11: texBlendMode=value; break;        // TEXTURE_BLENDMODE (decal/modulate/add)
+            case 12: alphaEnable=(value!=0); break;    // ALPHAENABLE
+            case 14: wrapMode=value; break;            // WRAPMODE (wrap/clamp/mirror)
+            case 15: transp3d=(value!=0); break;       // TRANSPARENTENABLE (indice 0 transparente)
+            case 16: specularEnable=(value!=0); break; // SPECULARENABLE
+            case 17: lightingEnable=(value!=0); break; // LIGHTINGENABLE
+            case 20: colorBlend=value; break;          // COLORBUFFER_BLENDMODE
+            case 21: fogColor=value&0xffffff; break;   // FOGCOLOR (RGB888)
+            case 22: fogMode=value; break;             // FOGMODE
+            case 23: fogStart=f2f(value); break;       // FOGSTART (fixed)
+            case 24: fogEnd=f2f(value); break;         // FOGEND (fixed)
+            case 25: fogDensity=f2f(value); break;     // FOGDENSITY (fixed)
             default: break;
         }
     }
+    public void setFogColor(int rgb){ fogColor=rgb&0xffffff; }
+    // teste de profundidade honrando ZFUNCTION (buf preenchido com MAX_VALUE = "vazio")
+    boolean zTest(float d,float buf){
+        switch(zFunc){
+            case 1:   return false;      // NEVER
+            case 4:   return d==buf;     // EQUAL
+            case 8:   return d<=buf;     // LEQUAL
+            case 16:  return d>buf;      // GREATER
+            case 32:  return d!=buf;     // NOTEQUAL
+            case 64:  return d>=buf;     // GEQUAL
+            case 128: return true;       // ALWAYS
+            default:  return d<buf;      // LESS (2) + default
+        }
+    }
+    // fator de fog: 1=sem fog, 0=fog total. z = profundidade view-space.
+    float fogFactor(float z){
+        float f = (fogMode==0) ? (float)Math.exp(-fogDensity*z)     // EXP
+                               : (fogEnd-z)/(fogEnd-fogStart);      // LINEAR
+        return f<0?0:(f>1?1:f);
+    }
+    // resolve coordenada de texel honrando WRAPMODE
+    int wrapCoord(int c,int size){
+        switch(wrapMode){
+            case 2:  return c<0?0:(c>=size?size-1:c);                              // CLAMP
+            case 4:  { int p=((c%(2*size))+2*size)%(2*size); return p<size?p:(2*size-1-p); } // MIRROR
+            default: return ((c%size)+size)%size;                                  // WRAP
+        }
+    }
     public void clearDepth(){ ensureZ(); java.util.Arrays.fill(zbuf, Float.MAX_VALUE); }
+    // limpa o z-buffer SO se ja foi alocado (3D ativo). Chamado a cada vFlipScreen: o z-buffer do mophun
+    // e scratch por-frame, mas jogos como Rally Pro Contest NUNCA chamam vSetZBuffer nem vClearScreen
+    // (redesenham a cena inteira todo frame). Sem limpar, o z acumulava a menor profundidade ja vista por
+    // pixel -> geometria nova falhava o z-test e SUMIA ao mover a camera. So-2D nunca aloca zbuf -> no-op.
+    public void clearDepthPerFrame(){ if(zbuf!=null) java.util.Arrays.fill(zbuf, Float.MAX_VALUE); }
     // vSetTexture(data,format,lods,mip): textura "efemera" -> indexado usa a paleta de TELA (activePalette=null).
     public int setTexture(int dataPtr,int format,int lods,int mipCount){
         texturePtr=dataPtr; textureFormat=format; activePalette=null;
@@ -356,8 +465,8 @@ public final class Renderer3D {
 
     // amostra a textura ativa em (u,v) [0..1] com wrap; decodifica pelo formato
     int texSample(float u,float v){
-        int tx=(int)(u*textureW), ty=(int)(v*textureH);
-        tx=((tx%textureW)+textureW)%textureW; ty=((ty%textureH)+textureH)%textureH;
+        int tx=wrapCoord((int)Math.floor(u*textureW), textureW);
+        int ty=wrapCoord((int)Math.floor(v*textureH), textureH);
         int idx=ty*textureW+tx;                                                    // indice linear do texel
         // formatos indexados: se transp3d (TransparentEnable) e o indice e 0 -> transparente (retorna alpha 0)
         switch(textureFormat){
@@ -366,28 +475,119 @@ public final class Renderer3D {
             case 5: case 16: case 18: { int i=read4(idx); return (transp3d&&i==0)?0:palLookup(i); }           // Palette16*
             case 8:  return rgb565(vm.read16(texturePtr+idx*2)&0xffff);             // RGB565
             case 9:  return Screen.rgb555ToArgb(vm.read16(texturePtr+idx*2)&0xffff);// RGB555
+            case 10: { int b=texturePtr+idx*3;                                       // RGB888 (24bpp direto)
+                       return 0xff000000|((vm.read8(b)&0xff)<<16)|((vm.read8(b+1)&0xff)<<8)|(vm.read8(b+2)&0xff); }
             case 11: return 0xff000000|(vm.read32(texturePtr+idx*4)&0xffffff);      // ARGB8888 (RGB direto, opaco)
+            case 12: { int w=vm.read16(texturePtr+idx*2)&0xffff;                    // RGB444 (4/4/4)
+                       int r=(w>>8)&0xf,g=(w>>4)&0xf,bl=w&0xf; return 0xff000000|((r*17)<<16)|((g*17)<<8)|(bl*17); }
+            case 13: { int w=vm.read16(texturePtr+idx*2)&0xffff;                    // ARGB4444 (bit alto do alpha = transparente)
+                       if((w&0x8000)==0) return 0; int r=(w>>8)&0xf,g=(w>>4)&0xf,bl=w&0xf; return 0xff000000|((r*17)<<16)|((g*17)<<8)|(bl*17); }
+            case 14: { int w=vm.read16(texturePtr+idx*2)&0xffff;                    // ARGB1555 (bit alto = transparente)
+                       if((w&0x8000)==0) return 0; int r=(w>>10)&0x1f,g=(w>>5)&0x1f,bl=w&0x1f;
+                       return 0xff000000|(Math.round(r*255f/31)<<16)|(Math.round(g*255f/31)<<8)|Math.round(bl*255f/31); }
             default: { int i=vm.read8(texturePtr+idx)&0xff; return (transp3d&&i==0)?0:palLookup(i); }
         }
     }
     static int rgb565(int v){ int r=(v>>11)&31,g=(v>>5)&63,b=v&31;
         return 0xff000000|(Math.round(r*255f/31)<<16)|(Math.round(g*255f/63)<<8)|Math.round(b*255f/31); }
     void ensureZ(){
-        if(zbuf==null || zW!=scr.w || zH!=scr.h){ zW=scr.w; zH=scr.h; zbuf=new float[zW*zH]; java.util.Arrays.fill(zbuf,Float.MAX_VALUE); }
+        if(zbuf==null || zW!=scr.pw || zH!=scr.ph){ zW=scr.pw; zH=scr.ph; zbuf=new float[zW*zH]; java.util.Arrays.fill(zbuf,Float.MAX_VALUE); }
+    }
+
+    // ---------------- iluminacao T&L (VMGP3D) ----------------
+    public void setAmbientLight(int rgb){ ambientScene=rgb&0xffffff; }
+    public void setCameraPos(int p){ camX=vx(p); camY=vy(p); camZ=vz(p); }
+    public void resetLights(){ for(int i=0;i<MAXL;i++) lights[i]=null; }
+    // LIGHT(40B): pos@0, dir@12, type@24(u16), diff r,g,b@26, spec sr,sg,sb@29, range@32(fixed=1/range), exponent@36(8:8), cutoff@38
+    public void setLight(int index,int p){
+        if(index<0||index>=MAXL) return;
+        float[] L=new float[16];
+        L[0]=vm.read16(p+24)&0xffff;                                     // type
+        L[1]=vx(p);        L[2]=vy(p);        L[3]=vz(p);                 // pos
+        L[4]=vx(p+12);     L[5]=vy(p+12);     L[6]=vz(p+12);             // dir
+        L[7]=vm.read8(p+26); L[8]=vm.read8(p+27); L[9]=vm.read8(p+28);    // diffuse r,g,b
+        L[10]=vm.read8(p+29);L[11]=vm.read8(p+30);L[12]=vm.read8(p+31);   // specular r,g,b
+        L[13]=f2f(vm.read32(p+32));                                       // range (guardado como 1/range)
+        L[14]=(vm.read16(p+36)&0xffff)/256f;                             // exponent (8:8)
+        L[15]=vm.read16(p+38)&0xffff;                                    // cutoff
+        lights[index]=L;
+    }
+    // MATERIAL = DSCOLOR: diff{b,g,r,a}@0, spec{b,g,r,f}@4
+    public void setMaterial(int p){
+        matDiffB=vm.read8(p);   matDiffG=vm.read8(p+1); matDiffR=vm.read8(p+2);
+        matSpecB=vm.read8(p+4); matSpecG=vm.read8(p+5); matSpecR=vm.read8(p+6);
+        matEmR=matEmG=matEmB=0; matAmbR=matAmbG=matAmbB=255; matShininess=4f;
+    }
+    // MATERIAL2: ambient,diff,spec,emission (DCOLOR@0,4,8,12), shininess@16(fixed)
+    public void setMaterial2(int p){
+        matAmbB=vm.read8(p);    matAmbG=vm.read8(p+1);  matAmbR=vm.read8(p+2);
+        matDiffB=vm.read8(p+4); matDiffG=vm.read8(p+5); matDiffR=vm.read8(p+6);
+        matSpecB=vm.read8(p+8); matSpecG=vm.read8(p+9); matSpecR=vm.read8(p+10);
+        matEmB=vm.read8(p+12);  matEmG=vm.read8(p+13);  matEmR=vm.read8(p+14);
+        matShininess=f2f(vm.read32(p+16));
+    }
+    // Aprox. fixed-function: cor = emission + diff*ambientCena + sum_luzes(diff*lightDiff*max(0,N.L)*atten).
+    // baseArgb = cor difusa por-vertice (substitui a reflectancia difusa do material, conforme VERTEXLIST).
+    int shadeVertex(int vertPtr,int normalPtr,int baseArgb){
+        int alpha=baseArgb>>>24;
+        float dr=(baseArgb>>16)&0xff, dg=(baseArgb>>8)&0xff, db=baseArgb&0xff;   // reflectancia difusa 0..255
+        // normal p/ view: rotaciona pela 3x3 da matriz atual (modelview) e normaliza
+        float nx=vx(normalPtr), ny=vy(normalPtr), nz=vz(normalPtr);
+        float wnx=current[0]*nx+current[1]*ny+current[2]*nz;
+        float wny=current[4]*nx+current[5]*ny+current[6]*nz;
+        float wnz=current[8]*nx+current[9]*ny+current[10]*nz;
+        float nl=(float)Math.sqrt(wnx*wnx+wny*wny+wnz*wnz); if(nl>1e-6f){wnx/=nl;wny/=nl;wnz/=nl;}
+        // posicao view do vertice (p/ luzes point/spot)
+        float ox=f2f(vm.read32(vertPtr)),oy=f2f(vm.read32(vertPtr+4)),oz=f2f(vm.read32(vertPtr+8));
+        float wx=current[0]*ox+current[1]*oy+current[2]*oz+current[3];
+        float wy=current[4]*ox+current[5]*oy+current[6]*oz+current[7];
+        float wz=current[8]*ox+current[9]*oy+current[10]*oz+current[11];
+        float sar=((ambientScene>>16)&0xff)/255f, sag=((ambientScene>>8)&0xff)/255f, sab=(ambientScene&0xff)/255f;
+        float rr=matEmR + dr*sar, gg=matEmG + dg*sag, bb=matEmB + db*sab;
+        for(int li=0; li<MAXL; li++){ float[] L=lights[li]; if(L==null) continue;
+            int type=(int)L[0]; float lx,ly,lz, atten=1f;
+            if(type==2){                 // DIRECTIONAL: vetor p/ a luz = -dir (dir = para onde a luz viaja)
+                lx=-L[4]; ly=-L[5]; lz=-L[6];
+                float ll=(float)Math.sqrt(lx*lx+ly*ly+lz*lz); if(ll>1e-6f){lx/=ll;ly/=ll;lz/=ll;}
+            } else {                     // POINT/SPOT: vetor do vertice ate a luz + atenuacao por distancia
+                lx=L[1]-wx; ly=L[2]-wy; lz=L[3]-wz;
+                float dist=(float)Math.sqrt(lx*lx+ly*ly+lz*lz); if(dist>1e-6f){lx/=dist;ly/=dist;lz/=dist;}
+                if(L[13]>0f){ atten=1f-dist*L[13]; if(atten<0f)atten=0f; }
+            }
+            float ndotl=wnx*lx+wny*ly+wnz*lz; if(ndotl<0f) ndotl=0f;
+            float k=ndotl*atten;
+            rr += dr*(L[7]/255f)*k; gg += dg*(L[8]/255f)*k; bb += db*(L[9]/255f)*k;
+        }
+        return (alpha<<24)|(clamp((int)rr)<<16)|(clamp((int)gg)<<8)|clamp((int)bb);
+    }
+    // vLightPoint(LIGHTARGS*): pre-ilumina uma lista de vertices, escrevendo dstdiff (DCOLOR). LIGHTARGS: v@0,n@4,color@8,dstdiff@12,dstspec@16,count@20
+    public void lightPoint(int argsPtr){
+        int vP=vm.read32(argsPtr), nP=vm.read32(argsPtr+4), colP=vm.read32(argsPtr+8);
+        int ddP=vm.read32(argsPtr+12), dsP=vm.read32(argsPtr+16);
+        int count=vm.read16(argsPtr+20)&0xffff;
+        if(vP==0||nP==0) return;
+        for(int i=0;i<count;i++){
+            int base = colP!=0 ? diffuseArgb(colP+i*4) : ((255<<24)|(matDiffR<<16)|(matDiffG<<8)|matDiffB);
+            int lit = shadeVertex(vP+i*12, nP+i*12, base);
+            if(ddP!=0){ vm.write8(ddP+i*4, lit&0xff); vm.write8(ddP+i*4+1,(lit>>8)&0xff);
+                        vm.write8(ddP+i*4+2,(lit>>16)&0xff); vm.write8(ddP+i*4+3,(lit>>>24)); }
+            if(dsP!=0) vm.write32(dsP+i*4, 0);   // specular nao calculado (aprox.)
+        }
     }
 
     // ---------------- render ----------------
+    // VERTEXLIST: v@0, uv@4, diff@8, spec@12, normal@16, count@20
     public void renderPrimitive(int meshPtr,int topology){
-        int vertsP=vm.read32(meshPtr), uvsP=vm.read32(meshPtr+4), diffP=vm.read32(meshPtr+8);
+        int vertsP=vm.read32(meshPtr), uvsP=vm.read32(meshPtr+4), diffP=vm.read32(meshPtr+8), normP=vm.read32(meshPtr+16);
         int count=vm.read16(meshPtr+20)&0xffff;
         if(vertsP==0||count<3) return; drawCalls++;
-        renderIndexed(vertsP, uvsP, diffP, count, 0, 0, topology);
+        renderIndexed(vertsP, uvsP, diffP, normP, count, 0, 0, topology);
     }
     public void renderPrimitiveIndexed(int idxPtr,int idxCount,int meshPtr,int topology){
-        int vertsP=vm.read32(meshPtr), uvsP=vm.read32(meshPtr+4), diffP=vm.read32(meshPtr+8);
+        int vertsP=vm.read32(meshPtr), uvsP=vm.read32(meshPtr+4), diffP=vm.read32(meshPtr+8), normP=vm.read32(meshPtr+16);
         int count=vm.read16(meshPtr+20)&0xffff;
         if(vertsP==0||idxPtr==0||idxCount<3) return; drawCalls++;
-        renderIndexed(vertsP, uvsP, diffP, count, idxPtr, idxCount, topology);
+        renderIndexed(vertsP, uvsP, diffP, normP, count, idxPtr, idxCount, topology);
     }
     // vDrawPolygon(v1,v2,v3): NativeVertexGST (position Vector4@0, diffuse@16, spec@20, uv@24)
     public void drawPolygon(int p1,int p2,int p3){
@@ -404,34 +604,52 @@ public final class Renderer3D {
         clipRaster(cl[0],cl[1],cl[2],col[0],col[1],col[2],uv[0],uv[1],uv[2],tex);
     }
 
-    void renderIndexed(int vertsP,int uvsP,int diffP,int count,int idxPtr,int idxCount,int topology){
+    void renderIndexed(int vertsP,int uvsP,int diffP,int normP,int count,int idxPtr,int idxCount,int topology){
         ensureZ();
         float[] mvp=mul(projection,current);
         boolean tex = uvsP!=0 && texturePtr!=0 && textureW>0;
+        boolean lit = lightingEnable && normP!=0;   // T&L so quando o jogo habilita LIGHTINGENABLE e fornece normais
         float[][] clip=new float[count][4]; int[] col=new int[count]; float[][] uv=new float[count][2];
         for(int i=0;i<count;i++){
             int vp=vertsP+i*12;
             xform(mvp, f2f(vm.read32(vp)), f2f(vm.read32(vp+4)), f2f(vm.read32(vp+8)), 1f, clip[i]);
-            col[i]= diffP!=0 ? diffuseArgb(diffP+i*4) : 0xffffffff;
+            int base = diffP!=0 ? diffuseArgb(diffP+i*4) : 0xffffffff;
+            col[i]= lit ? shadeVertex(vp, normP+i*12, base) : base;
             if(tex){ uv[i][0]=uv2f((short)vm.read16(uvsP+i*4)); uv[i][1]=uv2f((short)vm.read16(uvsP+i*4+2)); }
         }
+        // vRenderPrimitiveIndexed: o index list pode conter VARIAS strips/fans separadas por -1 (0xFFFF),
+        // conforme o SDK ("Multiple strips and fans are supported using indexnr -1 as delimiter"). Cada
+        // sub-run REINICIA a paridade da strip e o pivot do fan; sem isso os triangulos apos o -1 saiam
+        // com winding invertido e o backface culling os apagava -> faces do carro/mapa "sumindo" ao mover.
         int n = idxPtr!=0 ? idxCount : count;
-        for(int t=0;t+2<n;){
-            int a,b,c;
-            if(topology==0x10){          // TriangleStrip
-                a=idxAt(idxPtr,t); b=idxAt(idxPtr,t+1); c=idxAt(idxPtr,t+2);
-                if((t&1)!=0){ int tmp=b; b=c; c=tmp; } t+=1;
-            } else if(topology==0x20){   // TriangleFan
-                a=idxAt(idxPtr,0); b=idxAt(idxPtr,t+1); c=idxAt(idxPtr,t+2); t+=1;
+        int runStart=0;
+        while(runStart<n){
+            int runEnd=runStart;
+            while(runEnd<n && idxAt(idxPtr,runEnd)>=0) runEnd++;   // -1 (ou fim da lista) termina o run
+            int len=runEnd-runStart;
+            if(topology==0x10){          // TriangleStrip: paridade LOCAL ao run
+                for(int k=0;k+2<len;k++){
+                    int a=idxAt(idxPtr,runStart+k), b=idxAt(idxPtr,runStart+k+1), c=idxAt(idxPtr,runStart+k+2);
+                    if((k&1)!=0){ int tmp=b; b=c; c=tmp; }
+                    emitTri(a,b,c,count,clip,col,uv,tex);
+                }
+            } else if(topology==0x20){   // TriangleFan: pivot = 1o vertice DO run
+                int a=idxAt(idxPtr,runStart);
+                for(int k=1;k+1<len;k++) emitTri(a, idxAt(idxPtr,runStart+k), idxAt(idxPtr,runStart+k+1), count,clip,col,uv,tex);
             } else {                     // TriangleList
-                a=idxAt(idxPtr,t); b=idxAt(idxPtr,t+1); c=idxAt(idxPtr,t+2); t+=3;
+                for(int k=0;k+2<len;k+=3) emitTri(idxAt(idxPtr,runStart+k), idxAt(idxPtr,runStart+k+1), idxAt(idxPtr,runStart+k+2), count,clip,col,uv,tex);
             }
-            if(a<0||b<0||c<0||a>=count||b>=count||c>=count) continue;
-            clipRaster(clip[a],clip[b],clip[c],col[a],col[b],col[c],uv[a],uv[b],uv[c],tex);
+            runStart = runEnd+1;         // pula o delimitador -1
         }
     }
+    // emite 1 triangulo (com bounds-check dos indices contra a contagem de vertices)
+    void emitTri(int a,int b,int c,int count,float[][] clip,int[] col,float[][] uv,boolean tex){
+        if(a<0||b<0||c<0||a>=count||b>=count||c>=count) return;
+        clipRaster(clip[a],clip[b],clip[c],col[a],col[b],col[c],uv[a],uv[b],uv[c],tex);
+    }
     int idxAt(int idxPtr,int i){ return idxPtr==0 ? i : (short)vm.read16(idxPtr+i*2); }
-    int diffuseArgb(int p){ int b=vm.read8(p), g=vm.read8(p+1), r=vm.read8(p+2); return 0xff000000|(r<<16)|(g<<8)|b; }
+    // DCOLOR = {b,g,r,a}; preserva o alpha difuso (usado pelo color-buffer blend quando ALPHAENABLE)
+    int diffuseArgb(int p){ int b=vm.read8(p), g=vm.read8(p+1), r=vm.read8(p+2), a=vm.read8(p+3); return (a<<24)|(r<<16)|(g<<8)|b; }
 
     // Recorta o triangulo contra o NEAR-plane (z_clip>=0) e rasteriza os triangulos resultantes.
     // Sem isto, triangulos que cruzam o near eram DESCARTADOS (geometria "some" ao chegar perto) e
@@ -464,6 +682,8 @@ public final class Renderer3D {
         float x0=vpL+(c0[0]*iw0*0.5f+0.5f)*vpW, y0=vpT+(0.5f-c0[1]*iw0*0.5f)*vpH, z0=c0[2]*iw0;
         float x1=vpL+(c1[0]*iw1*0.5f+0.5f)*vpW, y1=vpT+(0.5f-c1[1]*iw1*0.5f)*vpH, z1=c1[2]*iw1;
         float x2=vpL+(c2[0]*iw2*0.5f+0.5f)*vpW, y2=vpT+(0.5f-c2[1]*iw2*0.5f)*vpH, z2=c2[2]*iw2;
+        final int rs=scr.rs;                         // supersampling: rasteriza em coords FISICAS (rs x)
+        if(rs>1){ x0*=rs; y0*=rs; x1*=rs; y1*=rs; x2*=rs; y2*=rs; }
         float area=(x1-x0)*(y2-y0)-(x2-x0)*(y1-y0);
         if(area==0) return;
         // backface culling (honra cullMode do jogo: 1=CW, 2=CCW). Descarta faces de tras -> tira
@@ -471,11 +691,15 @@ public final class Renderer3D {
         if(!NOCULL){ if(cullMode==1 && area>0) return; if(cullMode==2 && area<0) return; }
         int minX=(int)Math.floor(Math.min(x0,Math.min(x1,x2))), maxX=(int)Math.ceil(Math.max(x0,Math.max(x1,x2)));
         int minY=(int)Math.floor(Math.min(y0,Math.min(y1,y2))), maxY=(int)Math.ceil(Math.max(y0,Math.max(y1,y2)));
-        minX=Math.max(minX,Math.max(vpL,scr.clipX0)); maxX=Math.min(maxX,Math.min(vpL+vpW,scr.clipX1));
-        minY=Math.max(minY,Math.max(vpT,scr.clipY0)); maxY=Math.min(maxY,Math.min(vpT+vpH,scr.clipY1));
-        int r0=(col0>>16)&0xff,g0=(col0>>8)&0xff,b0=col0&0xff;
-        int r1=(col1>>16)&0xff,g1=(col1>>8)&0xff,b1=col1&0xff;
-        int r2=(col2>>16)&0xff,g2=(col2>>8)&0xff,b2=col2&0xff;
+        minX=Math.max(minX,Math.max(vpL,scr.clipX0)*rs); maxX=Math.min(maxX,Math.min(vpL+vpW,scr.clipX1)*rs);
+        minY=Math.max(minY,Math.max(vpT,scr.clipY0)*rs); maxY=Math.min(maxY,Math.min(vpT+vpH,scr.clipY1)*rs);
+        // SHADEMODE FLAT: usa o vertice provocante (v0) p/ todo o triangulo (spec: "first vertex is used")
+        if(shadeMode==1){ col1=col0; col2=col0; }
+        int r0=(col0>>16)&0xff,g0=(col0>>8)&0xff,b0=col0&0xff,a0=(col0>>>24);
+        int r1=(col1>>16)&0xff,g1=(col1>>8)&0xff,b1=col1&0xff,a1=(col1>>>24);
+        int r2=(col2>>16)&0xff,g2=(col2>>8)&0xff,b2=col2&0xff,a2=(col2>>>24);
+        boolean blend = alphaEnable;   // ALPHAENABLE(12) liga o blend; state 20 (COLORBUFFER_BLENDMODE) so escolhe o modo
+        int fr=(fogColor>>16)&0xff, fg=(fogColor>>8)&0xff, fb=fogColor&0xff;
         float inv=1f/area;
         for(int py=minY;py<maxY;py++){ float fy=py+0.5f;
             for(int px=minX;px<maxX;px++){ float fx=px+0.5f;
@@ -485,20 +709,48 @@ public final class Renderer3D {
                 if(w0<0||w1<0||w2<0) continue;
                 float depth=w0*z0+w1*z1+w2*z2;
                 int zi=py*zW+px;
-                if(depth>=zbuf[zi]) continue;
-                int argb;
+                // primitivas transparentes (blend, ex.: a SOMBRA do carro) sao decals COPLANARES com o chao:
+                // com o teste estrito LESS elas z-fightam e somem. Usa LEQUAL (<=) p/ passar sobre o coplanar.
+                if(zEnable){ boolean pass = blend ? (depth <= zbuf[zi]+1e-5f) : zTest(depth,zbuf[zi]); if(!pass) continue; }
+                float iws = (tex||fogEnable) ? (w0*iw0+w1*iw1+w2*iw2) : 0f;
+                int rr,gg,bb;
                 if(tex){   // interpolacao perspective-correct de UV
-                    float iws=w0*iw0+w1*iw1+w2*iw2;
                     float u=(w0*uv0[0]*iw0+w1*uv1[0]*iw1+w2*uv2[0]*iw2)/iws;
                     float v=(w0*uv0[1]*iw0+w1*uv1[1]*iw1+w2*uv2[1]*iw2)/iws;
-                    argb=texSample(u,v);
-                    if((argb>>>24)==0) continue;   // texel transparente -> nao pinta NEM escreve z-buffer
+                    int t=texSample(u,v);
+                    if((t>>>24)==0) continue;      // texel transparente -> nao pinta NEM escreve z-buffer
+                    int tr=(t>>16)&0xff, tg=(t>>8)&0xff, tb=t&0xff;
+                    switch(texBlendMode){          // combina texel x cor difusa do fragmento (state 11)
+                        case 2: { int vr=(int)(w0*r0+w1*r1+w2*r2),vg=(int)(w0*g0+w1*g1+w2*g2),vb=(int)(w0*b0+w1*b1+w2*b2);
+                                  rr=tr*vr/255; gg=tg*vg/255; bb=tb*vb/255; break; }       // MODULATE
+                        case 4: { int vr=(int)(w0*r0+w1*r1+w2*r2),vg=(int)(w0*g0+w1*g1+w2*g2),vb=(int)(w0*b0+w1*b1+w2*b2);
+                                  rr=tr+vr; gg=tg+vg; bb=tb+vb; break; }                    // ADD
+                        default: rr=tr; gg=tg; bb=tb; break;                                // DECAL/REPLACE
+                    }
                 } else {
-                    int rr=(int)(w0*r0+w1*r1+w2*r2), gg=(int)(w0*g0+w1*g1+w2*g2), bb=(int)(w0*b0+w1*b1+w2*b2);
-                    argb=0xff000000|(clamp(rr)<<16)|(clamp(gg)<<8)|clamp(bb);
+                    rr=(int)(w0*r0+w1*r1+w2*r2); gg=(int)(w0*g0+w1*g1+w2*g2); bb=(int)(w0*b0+w1*b1+w2*b2);
                 }
-                zbuf[zi]=depth; pixelsDrawn++;
-                scr.fb[py*scr.w+px]=argb;
+                if(fogEnable){                     // mistura com a cor do fog pela profundidade (state 8)
+                    float f=fogFactor(iws>1e-9f?1f/iws:fogEnd);
+                    rr=(int)(rr*f+fr*(1-f)); gg=(int)(gg*f+fg*(1-f)); bb=(int)(bb*f+fb*(1-f));
+                }
+                rr=clamp(rr); gg=clamp(gg); bb=clamp(bb);
+                if(blend){                         // color-buffer blend com o pixel ja no framebuffer (state 20)
+                    int sa=(int)(w0*a0+w1*a1+w2*a2); if(sa<0)sa=0; else if(sa>255)sa=255;
+                    int dst=scr.fb[py*scr.pw+px], dr=(dst>>16)&0xff, dg=(dst>>8)&0xff, db=dst&0xff;
+                    // sem state 20 explicito, o default e ALPHA (SrcAlpha/InvSrcAlpha) = alpha do vertice/textura.
+                    // Rally desenha a SOMBRA do carro como poligono preto com alpha=0x80 (50%) e SO liga ALPHAENABLE;
+                    // antes (exigindo colorBlend!=0) saia preto opaco -> agora mistura 50% = sombra suave.
+                    switch(colorBlend!=0?colorBlend:2){
+                        case 1: rr=clamp(dr+rr*sa/255); gg=clamp(dg+gg*sa/255); bb=clamp(db+bb*sa/255); break; // ALPHAADD
+                        case 2: rr=(rr*sa+dr*(255-sa))/255; gg=(gg*sa+dg*(255-sa))/255; bb=(bb*sa+db*(255-sa))/255; break; // ALPHA
+                        case 3: rr=rr*dr/255; gg=gg*dg/255; bb=bb*db/255; break;                              // MODULATE
+                        default: break;                                                                       // REPLACE
+                    }
+                }
+                if(zEnable && !blend) zbuf[zi]=depth;   // transparente (sombra) nao escreve z -> nao oclui o carro
+                pixelsDrawn++;
+                scr.fb[py*scr.pw+px]=0xff000000|(rr<<16)|(gg<<8)|bb;
             }
         }
     }

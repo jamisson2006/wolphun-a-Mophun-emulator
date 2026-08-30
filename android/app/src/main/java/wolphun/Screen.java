@@ -17,7 +17,11 @@ import android.graphics.Paint;
  */
 public final class Screen {
     public final int w, h, scale;
-    public final int[] fb;                       // framebuffer ARGB (0xFFrrggbb)
+    // Supersampling interno (HD): jogo desenha em coords LOGICAS (w x h); framebuffer FISICO
+    // (pw x ph = w*rs x h*rs). 3D rasteriza em fisico (nitido); 2D escala em bloco rs x rs. rs=1 = identico.
+    public final int rs;                         // render scale (1 = desligado)
+    public final int pw, ph;                     // dimensoes FISICAS
+    public final int[] fb;                       // framebuffer ARGB FISICO (pw*ph)
     public final int[] palette = new int[256];   // ARGB (paleta mutável: RGB332 default + overrides do jogo)
     public final int[] rgb332  = new int[256];   // ARGB RGB332 FIXO (cor direta de sprites/tiles format 7)
 
@@ -62,10 +66,12 @@ public final class Screen {
     // buffer de saída com gamma (só usado se gamma != 1.0)
     private int[] displayFb;
 
-    public Screen(int w, int h, int scale){
+    public Screen(int w, int h, int scale){ this(w,h,scale,1); }
+    public Screen(int w, int h, int scale, int renderScale){
         this.w=w; this.h=h; this.scale=scale;
+        this.rs = renderScale<1?1:renderScale; this.pw=w*rs; this.ph=h*rs;
         clipX1=w; clipY1=h;
-        fb = new int[w*h];
+        fb = new int[pw*ph];
         initRgb332Palette();
         textPaint.setAntiAlias(false);
         textPaint.setColor(0xffffffff);
@@ -79,15 +85,42 @@ public final class Screen {
     public void setButtonBit(int bit, boolean down){ if(down) buttons|=bit; else buttons&=~bit; }
     public void clearButtons(){ buttons = 0; }
     public int getButtons(){ return buttons; }
+    // teclas do KEYPAD NUMERICO literais (ASCII '0'..'9','*','#'), lidas por vTestKey/vScanKeys.
+    // Jogos como Bomb Jack NAO tratam os numeros como d-pad — usam teclas numericas proprias p/ mover.
+    // O teclado virtual pode chamar setKeypad(ascii,down) p/ botoes numericos dedicados.
+    public final boolean[] keypadDown = new boolean[128];
+    public void setKeypad(int ascii, boolean down){ if(ascii>=0 && ascii<128) keypadDown[ascii]=down; }
+    public boolean keypadPressed(int ascii){ return ascii>=0 && ascii<128 && keypadDown[ascii]; }
 
     // ---- clip ----
     public void setClip(int x0,int y0,int x1,int y1){
         if(x0>x1){ int t=x0; x0=x1; x1=t; }
         if(y0>y1){ int t=y0; y0=y1; y1=t; }
         clipX0=Math.max(0,x0); clipY0=Math.max(0,y0);
-        clipX1=Math.min(w,x1); clipY1=Math.min(h,y1);
+        // vSetClipWindow e INCLUSIVO (x1/y1 = ultima coluna/linha, igual vFillRect — vmgp.h "Right position").
+        // Guardamos exclusivo [x0,x1) somando 1, p/ os consumidores manterem `>=clipX1`. Sem isto, o reveal
+        // do LOGO synergenix (clip (0,N,176,N) = 1 linha) virava range vazio [N,N) -> logo invisivel (branco).
+        clipX1=Math.min(w,x1+1); clipY1=Math.min(h,y1+1);
     }
     public boolean inClip(int x,int y){ return x>=clipX0 && x<clipX1 && y>=clipY0 && y<clipY1; }
+
+    // ---- escrita/leitura 2D em coords LOGICAS -> framebuffer FISICO (bloco rs x rs) ----
+    public void put(int lx,int ly,int argb){
+        if(lx<clipX0||lx>=clipX1||ly<clipY0||ly>=clipY1) return;
+        if(rs==1){ fb[ly*pw+lx]=argb; return; }
+        int bx=lx*rs, by=ly*rs;
+        for(int oy=0;oy<rs;oy++){ int row=(by+oy)*pw+bx; for(int ox=0;ox<rs;ox++) fb[row+ox]=argb; }
+    }
+    public void putNoClip(int lx,int ly,int argb){
+        if(lx<0||lx>=w||ly<0||ly>=h) return;
+        if(rs==1){ fb[ly*pw+lx]=argb; return; }
+        int bx=lx*rs, by=ly*rs;
+        for(int oy=0;oy<rs;oy++){ int row=(by+oy)*pw+bx; for(int ox=0;ox<rs;ox++) fb[row+ox]=argb; }
+    }
+    public int get(int lx,int ly){
+        if(lx<0||lx>=w||ly<0||ly>=h) return 0;
+        return fb[(ly*rs)*pw + (lx*rs)];
+    }
 
     // ---- paleta ----
     private void initRgb332Palette(){
@@ -108,9 +141,30 @@ public final class Screen {
     }
 
     // ---- fonte ----
-    public void selectFont(int px){
-        if(px<6) px = 8 + px*2;
-        if(px>24) px = 24;
+    // escala do texto DENTRO do jogo (substituta de vTextOut/vMsgBox). 1.0 = nativo; >1.0 aumenta
+    // a legibilidade em telas de celular. O layout dos jogos usa vTextExtent (mesma fonte) -> adapta.
+    public double fontScale = 1.0;
+    private int lastFontSize = 11, lastFontFlags = 0;
+    public void setFontScale(double s){ fontScale = (s<=0?1.0:s); selectFont(lastFontSize, lastFontFlags); }
+    public void selectFont(int size){ selectFont(size, lastFontFlags); }
+    // vSelectFont(size, flags): decodifica o 'size' do SDK (vmgp.h):
+    //   bit31 (FONT_SIZE_PIXEL_FLAG)  -> bits baixos = altura em PIXELS
+    //   bit30 (FONT_SIZE_POINTS_FLAG) -> bits baixos = altura em POINTS (~4/3 px)
+    //   senao -> preset relativo 0=Normal/1=Small/2=Large (comportamento original preservado).
+    // flags: FONT_STYLE_MONOSPACE(8) -> largura fixa (alinha menus); BOLD(2)/ITALIC(1).
+    public void selectFont(int size, int flags){
+        lastFontSize = size; lastFontFlags = flags;
+        int px;
+        if((size & 0x80000000)!=0)      px = size & 0x00FFFFFF;                          // pixels
+        else if((size & 0x40000000)!=0) px = (int)Math.round((size & 0x00FFFFFF)*4.0/3.0); // points->px
+        else { px = size; if(px<6) px = 8 + px*2; if(px>24) px = 24; }                    // presets (inalterado)
+        px = (int)Math.round(px * fontScale);
+        if(px<6) px = 6; if(px>48) px = 48;
+        int style = android.graphics.Typeface.NORMAL;
+        if((flags&2)!=0) style |= android.graphics.Typeface.BOLD;
+        if((flags&1)!=0) style |= android.graphics.Typeface.ITALIC;
+        android.graphics.Typeface base = (flags&8)!=0 ? android.graphics.Typeface.MONOSPACE : android.graphics.Typeface.DEFAULT;
+        textPaint.setTypeface(android.graphics.Typeface.create(base, style));
         textPaint.setTextSize(px);
         Paint.FontMetrics m = textPaint.getFontMetrics();
         baseline = -m.ascent + 1;
@@ -134,7 +188,7 @@ public final class Screen {
             for(int i=0;i<tw;i++){
                 int dx=x+i; if(dx<clipX0||dx>=clipX1) continue;
                 int p = fontPixels[j*fsW+i];
-                if((p>>>24) >= 0x80) fb[dy*w+dx] = 0xff000000 | rgb;
+                if((p>>>24) >= 0x80) put(dx, dy, 0xff000000 | rgb);
             }
         }
     }
@@ -177,7 +231,7 @@ public final class Screen {
     private void drawMsgBox(String title, String msg){
         int bg=0xff101840, border=0xffffffff;
         for(int y=3;y<h-3;y++) for(int x=3;x<w-3;x++)
-            fb[y*w+x] = (x==3||x==w-4||y==3||y==h-4) ? border : bg;
+            put(x, y, (x==3||x==w-4||y==3||y==h-4) ? border : bg);
         int yy=7;
         if(title!=null && !title.isEmpty()){ drawText(7, yy, title, 0xff00ffff); yy+=fontHeight()+3; }
         for(String line: wrapText(msg, w-14)){ if(yy>h-20) break; drawText(7, yy, line, 0xffffff00); yy+=fontHeight(); }

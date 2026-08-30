@@ -92,6 +92,36 @@ public final class Pip2 {
         }
     }
 
+    // Roda os CONSTRUTORES globais (C++ static init) ANTES do main, como o runtime mophun faz.
+    // O toolchain mophun exporta um simbolo Global "~C" apontando p/ a __CTOR_LIST__ (lista de
+    // enderecos de construtores em data, terminada em 0). Jogos em C puro (ex.: HC2) nao tem "~C"
+    // -> no-op. Jogos C++ (ex.: HC1) inicializam aqui o sistema de entidades/sprites; sem isto,
+    // os globais ficam zerados -> entidades clonadas/sem animacao. Chamar DEPOIS de vm.sdk ser
+    // atribuido (os construtores chamam SDK, ex.: vGetCaps) e ANTES do loop principal.
+    public void runConstructors(){
+        long listAddr = -1;
+        for(int i=0;i<exe.poolCount;i++){
+            Vmgp.PoolItem it = exe.pool[i];
+            if(it.type==3 && "~C".equals(exe.getString(it.meta))){ listAddr = poolValue[i]; break; }
+        }
+        if(listAddr<0) return;                       // sem construtores globais
+        int addr = (int)listAddr;
+        for(int n=0; n<256; n++){                     // enderecos absolutos ate o terminador 0
+            int ctor = read32(addr); addr += 4;
+            if(ctor==0) break;
+            callFunction(ctor);
+        }
+    }
+    // Chama uma funcao da VM (PC=fn, RA=sentinela) e roda ate ela retornar. Preserva/restaura o estado.
+    private void callFunction(int fn){
+        final int SENT = 0xFFFC;                      // fora do codigo; RET volta p/ ca -> paramos antes de executar
+        int sRA=R[RA>>2], sPC=R[PC>>2], sSP=R[SP>>2], sFP=R[FP>>2]; boolean sStop=stopped;
+        R[RA>>2]=SENT; R[PC>>2]=fn;
+        long g=0;
+        while(!stopped && R[PC>>2]!=SENT && g<50_000_000L){ step(); g++; }
+        stopped=sStop; R[RA>>2]=sRA; R[PC>>2]=sPC; R[SP>>2]=sSP; R[FP>>2]=sFP;
+    }
+
     // ================= memoria =================
     public int idx(int addr){ return addr - base; }
     public int  read8 (int a){ int i=idx(a); return (i>=0&&i<mem.length)? (mem[i]&0xff):0; }
@@ -239,7 +269,14 @@ public final class Pip2 {
             case 0x58: { int a=r32(s)+(int)fetchImm(); w32(d, read8(a)); break; }       // LDBUd
             case 0x59: { int a=r32(s)+(int)fetchImm(); w32(d, read16(a)); break; }      // LDHUd
             case 0x5A: w32(d, (int)fetchImm()); break;             // LDI
-            case 0x5B: { int pcb=R[PC>>2]; long im=fetchImm(); R[PC>>2]=(int)(pcb+im-4); break; } // JPl
+            case 0x5B: {   // JPl: imediato RAW = pc-relativo; ref de POOL = endereco ABSOLUTO (igual calll).
+                           // Antes usava fetchImm()+pcb+im-4, tratando o endereco de pool JA resolvido como
+                           // offset -> descarrilava (ex.: Football Pro jpl pool[955] -> 0x5dce0 fora do codigo).
+                int pcb=R[PC>>2]; int info=read32(pcb);
+                if((info & 0x80000000)!=0){ int raw=decodeRaw(info); R[PC>>2]=pcb+raw-4; }
+                else { int pidx=info-1; R[PC>>2]=(int)((pidx>=0 && pidx<poolValue.length)? poolValue[pidx] : (pcb+4)); }
+                break;
+            } // JPl
             case 0x5C: calll(); break;                             // CALLl
             case 0x5D: brR(r32(d)==r32(s)); break;                                    // BEQ
             case 0x5E: brR(r32(d)!=r32(s)); break;                                    // BNE
@@ -252,7 +289,7 @@ public final class Pip2 {
             case 0x65: brR(r32(d)<r32(s)); break;                                     // BLT
             case 0x66: brR((r32(d)&0xffffffffL)<(r32(s)&0xffffffffL)); break;         // BLTU
             default:
-                System.err.printf("PIP2: opcode 0x%02x nao implementado @0x%x (instr %d)%n", op, pc0, instr);
+                System.err.printf("PIP2: opcode 0x%02x not implemented @0x%x (instr %d)%n", op, pc0, instr);
                 stopped=true;
         }
     }

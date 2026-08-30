@@ -129,6 +129,52 @@ public final class GameLibrary {
         return -1;                                               // desconhecido -> default do usuario
     }
 
+    /**
+     * Resolucao nativa do jogo, quando o modelo (detectModel) e desconhecido:
+     *   1) tag [LxA] no nome do arquivo (ex.: "..._[176x208]_...");
+     *   2) senao, dimensoes do screenshot irmao — so aceitas se baterem EXATAMENTE com
+     *      uma resolucao de modelo conhecida (evita miniaturas/promos de tamanho aleatorio).
+     * Devolve {largura,altura} ou null se indeterminado (dai usa-se o default do usuario).
+     */
+    public static int[] detectRes(File mpn){
+        // 1) tag [LxA] no nome (explicita -> confiavel)
+        java.util.regex.Matcher m = java.util.regex.Pattern
+            .compile("\\[(\\d{2,4})x(\\d{2,4})\\]", java.util.regex.Pattern.CASE_INSENSITIVE)
+            .matcher(mpn.getName());
+        if(m.find()){
+            int w=Integer.parseInt(m.group(1)), h=Integer.parseInt(m.group(2));
+            if(w>=48 && h>=48 && w<=1024 && h<=1024) return new int[]{w,h};
+        }
+        // 2) screenshot irmao (so se casar com uma resolucao de modelo conhecida)
+        File dir = mpn.getParentFile();
+        if(dir!=null){
+            File[] files = dir.listFiles();
+            if(files!=null) for(File f: files){
+                if(!isShot(f)) continue;
+                int[] wh = imageSize(f);
+                if(wh!=null && Config.modelForRes(wh[0],wh[1])>=0) return wh;
+            }
+        }
+        return null;
+    }
+
+    /** Le so o cabecalho da imagem p/ obter (largura,altura), sem decodificar tudo. null em erro. */
+    static int[] imageSize(File img){
+        try {
+            javax.imageio.stream.ImageInputStream in = javax.imageio.ImageIO.createImageInputStream(img);
+            if(in==null) return null;
+            try {
+                java.util.Iterator<javax.imageio.ImageReader> it = javax.imageio.ImageIO.getImageReaders(in);
+                if(!it.hasNext()) return null;
+                javax.imageio.ImageReader r = it.next();
+                r.setInput(in);
+                int[] wh = { r.getWidth(0), r.getHeight(0) };
+                r.dispose();
+                return wh;
+            } finally { in.close(); }
+        } catch(Exception e){ return null; }
+    }
+
     static boolean isMpn(File f){ return f.isFile() && f.getName().toLowerCase().endsWith(".mpn"); }
     static boolean isShot(File f){
         if(!f.isFile()) return false;

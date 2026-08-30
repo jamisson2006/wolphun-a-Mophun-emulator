@@ -35,7 +35,7 @@ public final class GameWindow extends JFrame {
         statusTimer = new javax.swing.Timer(500, new ActionListener(){
             public void actionPerformed(ActionEvent e){
                 if(session==null || closing) return;
-                if(session.error!=null){ setTitle(name+" - "+Branding.APP_NAME+" [erro]"); onGameEnded(); return; }
+                if(session.error!=null){ setTitle(name+" - "+Branding.APP_NAME+" ["+Lang.t("st.error")+"]"); onGameEnded(); return; }
                 if(session.isStopped()){ onGameEnded(); return; }   // jogo saiu sozinho -> volta a biblioteca
                 int f = session.getScreen()!=null ? session.getScreen().flips : 0;
                 int fps = f-lastFlips; lastFlips=f;
@@ -102,7 +102,7 @@ public final class GameWindow extends JFrame {
             lastFlips=0; closing=false;
         } catch(Exception ex){
             closing=false;
-            JOptionPane.showMessageDialog(this, "Falha ao reiniciar: "+ex, "Erro", JOptionPane.ERROR_MESSAGE);
+            JOptionPane.showMessageDialog(this, Lang.t("err.restart")+" "+ex, Lang.t("dlg.error"), JOptionPane.ERROR_MESSAGE);
         }
     }
 
@@ -116,7 +116,7 @@ public final class GameWindow extends JFrame {
         Object[] opts = {Lang.t("gw.restartgame"), Lang.t("gw.backlib")};
         int ch = JOptionPane.showOptionDialog(this,
             Lang.t("gw.gameended"),
-            name+" - jogo encerrado", JOptionPane.YES_NO_OPTION, JOptionPane.INFORMATION_MESSAGE, null, opts, opts[0]);
+            name+" - "+Lang.t("st.ended"), JOptionPane.YES_NO_OPTION, JOptionPane.INFORMATION_MESSAGE, null, opts, opts[0]);
         if(ch==0){                                                        // Reiniciar: nova sessao, fica na janela
             try { startSession(); pauseItem.setText(Lang.t("gw.pause")); lastFlips=0; closing=false; statusTimer.start(); return; }
             catch(Exception ex){ /* se falhar, cai p/ voltar a biblioteca */ }
@@ -129,16 +129,16 @@ public final class GameWindow extends JFrame {
     void saveState(){
         if(session==null) return;
         try { session.saveState(stateFile());
-            setTitle(name+" - "+Branding.APP_NAME+" [estado salvo]");
-        } catch(Throwable t){ JOptionPane.showMessageDialog(this,"Falha ao salvar estado: "+t,"Erro",JOptionPane.ERROR_MESSAGE); }
+            setTitle(name+" - "+Branding.APP_NAME+" ["+Lang.t("st.statesaved")+"]");
+        } catch(Throwable t){ JOptionPane.showMessageDialog(this,Lang.t("err.savestate")+" "+t,Lang.t("dlg.error"),JOptionPane.ERROR_MESSAGE); }
     }
     void loadState(){
         if(session==null) return;
         File sf = stateFile();
-        if(!sf.isFile()){ JOptionPane.showMessageDialog(this,"Nenhum estado salvo para este jogo.","Sem estado",JOptionPane.INFORMATION_MESSAGE); return; }
+        if(!sf.isFile()){ JOptionPane.showMessageDialog(this,Lang.t("dlg.nostate"),Lang.t("gw.loadstate"),JOptionPane.INFORMATION_MESSAGE); return; }
         try { session.loadState(sf);
-            setTitle(name+" - "+Branding.APP_NAME+" [estado carregado]");
-        } catch(Throwable t){ JOptionPane.showMessageDialog(this,"Falha ao carregar estado: "+t,"Erro",JOptionPane.ERROR_MESSAGE); }
+            setTitle(name+" - "+Branding.APP_NAME+" ["+Lang.t("st.stateloaded")+"]");
+        } catch(Throwable t){ JOptionPane.showMessageDialog(this,Lang.t("err.loadstate")+" "+t,Lang.t("dlg.error"),JOptionPane.ERROR_MESSAGE); }
     }
 
     void close(){

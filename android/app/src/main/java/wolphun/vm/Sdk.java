@@ -13,11 +13,17 @@ public final class Sdk {
     long tick0 = System.currentTimeMillis();
     int nextHeap;
     int foreColor=0xff, backColor=0, transferMode=1;   // default = TransferMode.Transparent (nofun)
+    // fonte bitmap definida pelo jogo (VMGPFONT, usada por vPrint). ptr=0 => usa a fonte do sistema.
+    int aFontPtr=0, aFontData=0, aFontChartbl=0, aFontBpp=0, aFontW=0, aFontH=0, aFontPal=0;
     long rngState = 0x12345678L;
     public boolean soundEnabled = true;   // configuravel pelo emulador (Settings)
+    public boolean reverb = true;         // false = mata o "eco"/reverb do MIDI (transforma o SMF, ver MidiReverb)
     // identidade do aparelho (vGetCaps System): deviceId = (model<<16)|vendor. Configuravel.
     public int deviceModel = 2;            // SonyEricssonT610 (default)
     public int deviceVendor = 3;           // SonyEricsson
+    // formato grafico reportado no VideoCaps (vmgpvfmt.h): 7 = RGB332 (256 cores diretas), que e o
+    // framebuffer real deste emulador em TODOS os perfis de aparelho. "256 colors" nos jogos = formato>=6.
+    public int videoFormat = 7;            // VCAPS_RGB332
     public int apiMinor = 50;              // vGetVMGPInfo = (2<<16)|apiMinor
 
     // sprites
@@ -57,16 +63,23 @@ public final class Sdk {
         }
         switch(name){
             // ---------- memoria ----------
-            case "vNewPtr": case "vMalloc": vm.ret(alloc(vm.arg(0), false)); break;
+            case "vNewPtr": case "vMalloc": case "vNewPtrDbg": vm.ret(alloc(vm.arg(0), false)); break;
             case "vNewPtrClear": case "vAllocClear": case "vCallocPtr": vm.ret(alloc(vm.arg(0), true)); break;
-            case "vDisposePtr": case "vFreePtr": vm.ret(0); break;   // bump allocator: no-op
+            case "vDisposePtr": case "vFreePtr": vm.ret(0); break;
+            // vMemFree()/vMaxFreeBlock(): CONSULTAS (nao liberam!) — retornam bytes livres no heap. O Da Vinci
+            // Code chama vMemFree() antes de carregar o nivel 3D; retornar 0 fazia ele achar que nao ha memoria
+            // -> nao carrega -> tela preta no New Game. Bump allocator: livre = heapEnd-nextHeap.
+            case "vMemFree": case "vMaxFreeBlock": case "vMemAvail": vm.ret(vm.heapEnd - nextHeap); break;   // bump allocator: no-op
             // ---------- sistema ----------
             case "vGetTickCount": vm.ret((int)(System.currentTimeMillis()-tick0)); break;
+            case "vGetTime": vm.ret((int)(System.currentTimeMillis()/1000L)); break;   // segundos desde 1970 (epoch UTC). Football Pro usa p/ seed/relogio; antes caia no default=0 -> logica de tempo quebrava
             case "vGetTimeDate": case "vGetTimeDateUTC": writeDateTime(vm.arg(0)); vm.ret(0); break;
-            // vGetRandom retorna um valor CRU [0,32767] (estilo rand()/RAND_MAX). O ARGUMENTO é IGNORADO:
-            // os jogos fazem o próprio módulo (Bouncy: min + rnd%(max-min+1); outros: rnd%100 etc).
-            // Se modássemos aqui (r%arg), o módulo do jogo depois virava no-op -> loop infinito (Bouncy travava).
-            case "vGetRandom": { rngState=rngState*6364136223846793005L+1442695040888963407L; vm.ret((int)((rngState>>>33)&0x7fff)); break; }
+            // vGetRandom: 16 bits (VRAND_MAX=0xffff no SDK) devolvidos com SINAL ESTENDIDO p/ 32 bits,
+            // EXATAMENTE como o emulador oficial (log: retornos positivos <32768 E 0xFFFFxxxx negativos
+            // = bit 15 do valor 16-bit). Antes devolviamos so 15 bits [0,32767] (nunca bit 15) -> jogos
+            // que checam o bit-de-sinal p/ um coin-flip (ex.: Honey Cave 1 dano/recuperacao de vida)
+            // NUNCA disparavam. O ARGUMENTO e IGNORADO (jogos fazem o proprio modulo; senao Bouncy travava).
+            case "vGetRandom": { rngState=rngState*6364136223846793005L+1442695040888963407L; vm.ret((short)(rngState>>>33)); break; }
             case "vSetRandom": rngState = (vm.arg(0)&0xffffffffL); break;
             case "vGetCaps": vm.ret(getCaps(vm.arg(0), vm.arg(1))); break;
             case "vSysCtl": vm.ret(0); break;
@@ -85,7 +98,7 @@ public final class Sdk {
             case "vBeep": break;
             // ---------- graficos ----------
             case "vClearScreen": dlog("clearScreen fore="+colStr(vm.arg(0))); Arrays.fill(scr.fb, getColor(vm.arg(0))); vm.ret(0); break;
-            case "vFlipScreen": if(DRAWLOG) dlog("--- FLIP (frame "+drawLogFrame+") ---"); scr.present(); vm.ret(0); break;
+            case "vFlipScreen": if(DRAWLOG) dlog("--- FLIP (frame "+drawLogFrame+") ---"); scr.present(); r3d.clearDepthPerFrame(); vm.ret(0); break;
             case "vSetForeColor": foreColor=vm.arg(0); break;   // cor crua (indice ou RGB555 se bit31)
             case "vSetBackColor": backColor=vm.arg(0); break;
             case "vSetPaletteEntry": scr.setPaletteRgb555(vm.arg(0), vm.arg(1)); break;
@@ -106,6 +119,7 @@ public final class Sdk {
             case "vSpriteSet": { int s=vm.arg(0)&0xff; if(slotSprite!=null&&s<spriteCount){ slotSprite[s]=vm.arg(1); slotX[s]=(short)vm.arg(2); slotY[s]=(short)vm.arg(3);} break; }
             case "vUpdateSprite": if(slotSprite!=null) for(int i=0;i<spriteCount;i++) if(slotSprite[i]!=0) drawObject(slotX[i],slotY[i],slotSprite[i]); break;
             case "vDrawObject": drawObject((short)vm.arg(0),(short)vm.arg(1),vm.arg(2)); break;
+            case "vDrawTile":   drawTile(vm.arg(0),vm.arg(1),(short)vm.arg(2),(short)vm.arg(3)); break;   // tile 8x8 (chao/pista 3D do Rally)
             case "vUpdateSpriteRotate": break;
             case "vSpriteBoxCollision": vm.ret(spriteBoxCollision(vm.arg(0), vm.arg(1)&0xff, vm.arg(2)&0xff)); break;
             case "vSpriteCollision": vm.ret(spriteCollision(vm.arg(0)&0xff, vm.arg(1)&0xff, vm.arg(2)&0xff)); break;
@@ -118,11 +132,11 @@ public final class Sdk {
             case "vMapGetAttribute": vm.ret(mapAttr(vm.arg(0)&0xff, vm.arg(1)&0xff)); break;
             case "vMapGetTile": vm.ret(mapTile(vm.arg(0)&0xff, vm.arg(1)&0xff)); break;
             // ---------- texto (fonte do sistema via Java) ----------
-            case "vSelectFont": scr.selectFont(vm.arg(0)); vm.ret(vm.arg(1)); break;
-            case "vSetActiveFont": vm.ret(0); break;   // fonte bitmap custom: usamos a do sistema
+            case "vSelectFont": scr.selectFont(vm.arg(0), vm.arg(1)); vm.ret(vm.arg(1)); break;   // size + flags (SDK)
+            case "vSetActiveFont": vm.ret(setActiveFont(vm.arg(0))); break;   // fonte bitmap do jogo (VMGPFONT)
             case "vTextOut":  scr.drawText((short)vm.arg(0), (short)vm.arg(1), readStr(vm.arg(2), false), getColor(foreColor)); vm.ret(0); break;
             case "vTextOutU": scr.drawText((short)vm.arg(0), (short)vm.arg(1), readStr(vm.arg(2), true),  getColor(foreColor)); vm.ret(0); break;
-            case "vPrint":    scr.drawText((short)vm.arg(1), (short)vm.arg(2), readStr(vm.arg(3), false), getColor(foreColor)); vm.ret(0); break;
+            case "vPrint":    vPrint(vm.arg(0), (short)vm.arg(1), (short)vm.arg(2), readStr(vm.arg(3), false)); vm.ret(0); break;
             // extent = (altura << 16) | largura (o jogo le srli #16 p/ altura, &0xFFFF p/ largura)
             case "vTextExtent":  vm.ret(textExtent(readStr(vm.arg(0), false))); break;
             case "vTextExtentU": vm.ret(textExtent(readStr(vm.arg(0), true))); break;
@@ -163,6 +177,7 @@ public final class Sdk {
             case "vSetTexture": vm.ret(r3d.setTexture(vm.arg(0),vm.arg(1),vm.arg(2),vm.arg(3))); break;
             case "vCreateTexture": vm.ret(r3d.createTexture(vm.arg(0))); break;                 // textura gerenciada c/ paleta propria
             case "vSetActiveTexture": r3d.setActiveTexture(vm.arg(0)); vm.ret(0); break;         // reativa textura gerenciada (handle)
+            case "vSetFunctionalTexture": vm.ret(0); break;   // texturas funcionais/procedurais nao suportadas (raras) -> no-op
             case "vDeleteTexture": r3d.deleteTexture(vm.arg(0)); vm.ret(0); break;
             case "vDeleteAllTextures": r3d.deleteAllTextures(); vm.ret(0); break;
             case "vFreeTexture": vm.ret(0); break;                                               // no-op (igual ao nofun)
@@ -171,7 +186,7 @@ public final class Sdk {
             case "vDrawPolygon": r3d.drawPolygon(vm.arg(0),vm.arg(1),vm.arg(2)); break;   // 3D (3 NativeVertexGST)
             case "vDrawBillboard": r3d.drawBillboard(vm.arg(0)); break;                   // quad texturizado camera-facing
             case "vDrawFlatPolygon": fillFlatPoly(vm.arg(0)); break;                       // 2D flat tri (foreColor)
-            case "vGetInteger": if(vm.arg(1)!=0) vm.write32(vm.arg(1),2048); vm.ret(1); break;
+            case "vGetInteger": if(vm.arg(1)!=0) vm.write32(vm.arg(1), r3d.getInteger(vm.arg(0))); vm.ret(1); break;
             // matrizes
             case "vSetMatrixMode": r3d.setMatrixMode(vm.arg(0)); break;
             case "vMatrixIdentity": r3d.matrixIdentity(); break;
@@ -210,13 +225,30 @@ public final class Sdk {
             case "vFindRGBIndex": vm.ret(findRGBIndex(vm.arg(0))); break;
             // string/misc + musica (tracker: no-op por ora)
             case "vatoi": vm.ret(vatoi(vm.arg(0), vm.arg(1))); break;
-            case "vCopyRect": break;                                        // no-op (igual ao nofun)
-            case "vSprintf": vm.write8(vm.arg(0),0); vm.ret(0); break;       // no-op; null-termina o buffer destino
-            case "vMusicInit": case "vMusicLoad": vm.ret(1); break;          // handle dummy (sem musica, sem crash)
-            case "vMusicCtrl": case "vMusicCtrlEx": case "vMusicDispose": case "vMusicClose": vm.ret(0); break;
-            // luzes/material/fog: no-op (nosso rasterizador usa cor difusa por vertice, nao ilumina)
-            case "vSetMaterial": case "vSetMaterial2": case "vResetLights": case "vSetLight":
-            case "vSetAmbientLight": case "vSetFogColor": case "vSetDisplayWindow": break;
+            case "vCopyRect": copyRect(vm.arg(0), vm.arg(1), vm.arg(2), vm.arg(3)); break;
+            case "vSprintf": vm.ret(sprintfReg(vm.arg(0), vm.arg(1))); break;
+            case "vSprintfVa": vm.ret(sprintfVa(vm.arg(0), vm.arg(1), vm.arg(2))); break;
+            case "vMusicInit": vm.ret(0); break;                             // SND_OK (igual vSoundInit)
+            case "vMusicLoad": vm.ret(1); break;                             // handle dummy de musica          // handle dummy (sem musica, sem crash)
+            case "vMusicCtrl": case "vMusicCtrlEx": case "vMusicDispose": case "vMusicDisposeHandle": case "vMusicClose": vm.ret(0); break;
+            // iluminacao T&L (so tem efeito quando o jogo habilita LIGHTINGENABLE / state 17)
+            case "vSetLight": r3d.setLight(vm.arg(0), vm.arg(1)); break;
+            case "vSetMaterial": r3d.setMaterial(vm.arg(0)); break;
+            case "vSetMaterial2": r3d.setMaterial2(vm.arg(0)); break;
+            case "vSetAmbientLight": r3d.setAmbientLight(vm.arg(0)); break;
+            case "vSetCameraPos": r3d.setCameraPos(vm.arg(0)); break;
+            case "vResetLights": r3d.resetLights(); break;
+            case "vLightPoint": r3d.lightPoint(vm.arg(0)); break;
+            case "vSetDisplayWindow": break;
+            case "vSetFogColor": r3d.setFogColor(vm.arg(0)); break;
+            // 3D: matriz/consulta/vetores extra (VMGP3D)
+            case "vMatrixTranspose": r3d.matrixTranspose(); break;
+            case "vMatrixMultiply3x3": r3d.matrixMultiply3x3(vm.arg(0)); break;
+            case "vGetSupportedRenderStates": vm.ret(0xFFFFFFFF); break;   // permissivo: todos os valores
+            case "vGetZBufferValue": vm.ret(r3d.getZBufferValue(vm.arg(0),vm.arg(1))); break;
+            case "vVectorArrayAdd": r3d.vectorArrayAdd(vm.arg(0),vm.arg(1),vm.arg(2),vm.arg(3)); break;
+            case "vVectorArrayDelta": r3d.vectorArrayDelta(vm.arg(0),vm.arg(1),vm.arg(2),vm.arg(3)); break;
+            case "vPow": vm.ret(r3d.vPow(vm.arg(0),vm.arg(1))); break;
             // math fixed-point
             case "vMul": vm.ret(r3d.vMul(vm.arg(0),vm.arg(1))); break;
             case "vDiv": vm.ret(r3d.vDiv(vm.arg(0),vm.arg(1))); break;
@@ -225,7 +257,7 @@ public final class Sdk {
             case "vCos": vm.ret(r3d.vCos(vm.arg(0))); break;
             case "vTan": vm.ret(r3d.vTan(vm.arg(0))); break;
             default:
-                if(loggedMissing.add(name)) System.out.println("  [SDK nao implementado] "+name);
+                if(loggedMissing.add(name)) System.out.println("  [SDK not implemented] "+name);
                 vm.ret(0);
         }
     }
@@ -263,6 +295,7 @@ public final class Sdk {
     // diagonais 1=Up+Left 3=Up+Right 7=Down+Left 9=Down+Right. Retorna 1 se pressionado.
     static final int SEOPTION = 217;
     int testKey(int key){
+        if(scr.keypadPressed(key)) return 1;              // tecla numerica literal pressionada (jogos tipo Bomb Jack)
         int b = scr.getButtons();
         final int U=Screen.UP,D=Screen.DOWN,L=Screen.LEFT,R=Screen.RIGHT,F=Screen.FIRE,S=Screen.SELECT,F2=Screen.FIRE2;
         switch(key){
@@ -282,6 +315,9 @@ public final class Sdk {
     }
     // vScanKeys(): ASCII da tecla atual (reverso do testKey; nofun InputDriver.KeyScan)
     int scanKeys(){
+        for(int a='0'; a<='9'; a++) if(scr.keypadPressed(a)) return a;   // tecla numerica literal tem prioridade
+        if(scr.keypadPressed('*')) return '*';
+        if(scr.keypadPressed('#')) return '#';
         int b = scr.getButtons();
         final int U=Screen.UP,D=Screen.DOWN,L=Screen.LEFT,R=Screen.RIGHT,F=Screen.FIRE,S=Screen.SELECT,F2=Screen.FIRE2;
         if((b&U)!=0){ if((b&L)!=0) return '1'; if((b&R)!=0) return '3'; return '2'; }
@@ -300,7 +336,7 @@ public final class Sdk {
         return scr.palette[c & 0xff];
     }
     void px(int x,int y,int argb){
-        if(scr.inClip(x,y)) scr.fb[y*scr.w+x]=argb;
+        scr.put(x,y,argb);
     }
     // vFillRect(x0,y0,x1,y1) - cantos; cor = foreColor.
     // NORMALIZA cantos invertidos: jogos pseudo-3D (XxX/V-Rally) desenham as BANDAS do terreno via
@@ -310,16 +346,19 @@ public final class Sdk {
     void fillRect(int x0,int y0,int x1,int y1){
         if(x0>x1){ int t=x0; x0=x1; x1=t; }
         if(y0>y1){ int t=y0; y0=y1; y1=t; }
-        if(x0==x1||y0==y1) return;                      // area zero de fato (nada a desenhar)
+        // vFillRect e INCLUSIVO: x1/y1 sao a borda DIREITA/INFERIOR (SDK: "x1=Right position"), NAO exclusiva.
+        // Uma coluna/linha de 1 pixel (x0==x1) desenha 1 pixel — ex.: o preenchimento da barra de vida do
+        // Honey Cave 1 (vFillRect(x,74,x,77) por coluna). O nofun usava exclusivo (xx<x1) e pulava x0==x1
+        // -> a barra ficava VAZIA. Inclusivo tb corrige fills de tela que perdiam 1px na borda dir/inf.
         int c=getColor(foreColor);
         dlog("fillRect ("+x0+","+y0+")-("+x1+","+y1+") fore="+colStr(foreColor)+" clip=["+scr.clipX0+","+scr.clipY0+"-"+scr.clipX1+","+scr.clipY1+"] v150="+version150);
         if(!version150){
             // SDK <1.50 (nofun Graphics.cs): vFillRect IGNORA o clip -> so limita as bordas da TELA.
             // Sem isto, XxX/V-Rally clipam ao topo (y<79) e o fillRect do chao (y>=100) some -> smearing.
-            int cx0=Math.max(0,x0), cy0=Math.max(0,y0), cx1=Math.min(scr.w,x1), cy1=Math.min(scr.h,y1);
-            for(int yy=cy0;yy<cy1;yy++){ int row=yy*scr.w; for(int xx=cx0;xx<cx1;xx++) scr.fb[row+xx]=c; }
+            int cx0=Math.max(0,x0), cy0=Math.max(0,y0), cx1=Math.min(scr.w-1,x1), cy1=Math.min(scr.h-1,y1);
+            for(int yy=cy0;yy<=cy1;yy++) for(int xx=cx0;xx<=cx1;xx++) scr.putNoClip(xx,yy,c);
         } else {
-            for(int yy=y0;yy<y1;yy++) for(int xx=x0;xx<x1;xx++) px(xx,yy,c);   // SDK >=1.50: respeita o clip
+            for(int yy=y0;yy<=y1;yy++) for(int xx=x0;xx<=x1;xx++) px(xx,yy,c);   // SDK >=1.50: respeita o clip
         }
     }
     // vDrawLine(x0,y0,x1,y1) - Bresenham com foreColor (nofun implementa; era no-op aqui)
@@ -354,7 +393,7 @@ public final class Sdk {
             int w1=(x2-px)*(y0-py)-(x0-px)*(y2-py);
             int w2=area-w0-w1;
             boolean in = area>0 ? (w0>=0&&w1>=0&&w2>=0) : (w0<=0&&w1<=0&&w2<=0);
-            if(in) scr.fb[py*scr.w+px]=c;
+            if(in) scr.put(px,py,c);
         }
     }
 
@@ -422,26 +461,111 @@ public final class Sdk {
                     // sub-byte (Palette2/4/16 = 1/2/4bpp) e LSB-first no mophun: 1o pixel no nibble/bit BAIXO
                     // (nofun DataConvertor.PaletteToARGB8888). MSB-first embaralhava texto/HUD de jogos 4bpp.
                     int idx=(vm.read8(byteIdx) >> (bitPos&7)) & mask;
-                    // indice 0 = cor-chave transparente. RGB332 (fmt7): SEMPRE transparente, mesmo em modo
-                    // Block — os sprites do HC2 pos-transicao de fase ficam com transferMode=0 mas continuam
-                    // "PNG transparentes" no aparelho real. Demais formatos respeitam o transferMode (nao fura fundos opacos).
+                    // idx0 = cor-chave TRANSPARENTE: no modo Transparent (tm&1) p/ QUALQUER formato, E
+                    // SEMPRE para fmt7 (RGB332). Motivo (pista do repo GitHub jamisson2006/wolphun): os
+                    // sprites do HC2 pos-transicao de fase ficam com transferMode=0 mas continuam
+                    // "PNG transparentes" no aparelho real -> depender de tm dava "quadrado preto" no ceu,
+                    // inclusive apos sair/re-entrar (resume) e em save states. Fmt7-sempre-transparente e
+                    // ROBUSTO (nao depende do estado da paleta). Testado: NAO regride o logo synergenix nem
+                    // o carro/pneu do menu do Rally (esses nao usam idx0 fmt7 sobre fundo claro).
                     if((format==7 || transp) && idx==0) continue;
                     if(format==1||format==2||format==0){                        // grayscale/mono
                         int g=Math.round(idx*255f/mask); argb=0xff000000|(g<<16)|(g<<8)|g;
                     } else if(format==7){
                         argb=scr.rgb332[idx&0xff];                               // RGB332 = cor DIRETA; palOff NAO se aplica (nao e palette format)
                     } else {
-                        argb=scr.palette[(idx+palOff)&0xff];                     // formatos indexados: paleta mutavel
+                        // Palette256 (fmt6): o indice JA e 0-255 (paleta completa) -> palOff NAO se aplica
+                        // (senao desloca +1: V-Rally 2 seta palette[197]=cor do carro, corpo=idx 197, palOff=1
+                        //  -> lia palette[198] -> carros psicodelicos). Palette16 (fmt5): palOff = banco de 16.
+                        int po = (format==6) ? 0 : palOff;
+                        argb=scr.palette[(idx+po)&0xff];                         // formatos indexados: paleta mutavel
                     }
                 } else {                                                        // 16bpp direto
                     int v=vm.read16(pix+pi*2)&0xffff;
                     if(transp && v==0) continue;
                     argb=(format==8)? rgb565(v) : Screen.rgb555ToArgb(v);
                 }
-                scr.fb[dy*scr.w+dx]=argb;
+                scr.put(dx,dy,argb);
             }
         }
     }
+    // vSetActiveFont(pFont): le a struct VMGPFONT {u32 fontdata, u32 chartbl, u8 bpp,w,h,palindex}
+    // e a torna a fonte ativa do vPrint. Devolve o ponteiro da fonte anterior (0 se nenhuma).
+    int setActiveFont(int ptr){
+        int prev = aFontPtr;
+        aFontPtr = ptr;
+        if(ptr==0){ aFontData=aFontChartbl=aFontBpp=aFontW=aFontH=aFontPal=0; return prev; }
+        aFontData    = vm.read32(ptr+0);
+        aFontChartbl = vm.read32(ptr+4);
+        aFontBpp     = vm.read8(ptr+8);
+        aFontW       = vm.read8(ptr+9);
+        aFontH       = vm.read8(ptr+10);
+        aFontPal     = vm.read8(ptr+11);
+        return prev;
+    }
+    // vPrint(mode,x,y,str): desenha texto com a fonte bitmap ATIVA (vSetActiveFont). Cada caractere
+    // ocupa width x height pixels; glyph = chartbl[ch] (0xff = ausente). Bits LSB-first (bit menos
+    // significativo = pixel mais a esquerda), linhas contiguas, cada caractere alinhado a byte.
+    // Fonte monocromatica (bpp=1): bit 1 = foreColor. 4-cores (bpp=2): indice 0 = transparente,
+    // 1-3 = palette[palindex+indice]. Largura FIXA (por isso a fonte do sistema proporcional embaralhava).
+    void vPrint(int mode, int x, int y, String str){
+        if(aFontPtr==0 || aFontW<=0 || aFontH<=0){                 // sem fonte de usuario: cai na do sistema
+            scr.drawText(x, y, str, getColor(foreColor)); return;
+        }
+        if(str==null || str.isEmpty()) return;
+        int bpp=aFontBpp<=0?1:aFontBpp, mask=(1<<bpp)-1;
+        int glyphBytes = (aFontW*aFontH*bpp + 7) >> 3;             // cada caractere alinhado a byte
+        int fg = getColor(foreColor);
+        int penX = x;
+        for(int k=0;k<str.length();k++){
+            int ch = str.charAt(k) & 0xff;
+            int gi = vm.read8(aFontChartbl + ch);
+            if(gi!=0xff){                                          // 0xff = caractere ausente (so avanca)
+                int base = aFontData + gi*glyphBytes;
+                for(int row=0;row<aFontH;row++){
+                    int dy=y+row; if(dy<scr.clipY0||dy>=scr.clipY1) continue;
+                    for(int col=0;col<aFontW;col++){
+                        int dx=penX+col; if(dx<scr.clipX0||dx>=scr.clipX1) continue;
+                        int bitPos=(row*aFontW+col)*bpp;
+                        int val=(vm.read8(base+(bitPos>>3)) >> (bitPos&7)) & mask;
+                        if(val==0) continue;                       // 0 = transparente (mono e 4-cores)
+                        int argb = (bpp==1) ? fg : scr.palette[(aFontPal+val)&0xff];
+                        scr.put(dx,dy,argb);
+                    }
+                }
+            }
+            penX += aFontW;                                        // largura FIXA
+        }
+    }
+
+    // vDrawTile(data, format, x, y): desenha UM tile 8x8 em (x,y). format: bits0-2=formato de pixel
+    // (VCAPS_IND2..RGB332), bit3=transparente, bits8-15=offset de paleta. Usado como MOTOR DE CHAO/PISTA
+    // (ex.: Rally Pro Contest desenha o terreno 3D como grade de tiles 8x8 -> 1144 tiles/frame).
+    void drawTile(int dataPtr, int format, int x, int y){
+        int pixFmt = format & 0x7;                      // bits 0-2 = formato de pixel
+        boolean transp = (format & 0x8)!=0;             // bit 3 = transparente (indice 0 = chave)
+        int palOff = (format>>8) & 0xff;                // bits 8-15 = offset de paleta
+        int bpp = bppOf(pixFmt), mask=(1<<bpp)-1;
+        for(int j=0;j<8;j++){
+            int dy=y+j; if(dy<scr.clipY0||dy>=scr.clipY1) continue;
+            for(int i=0;i<8;i++){
+                int dx=x+i; if(dx<scr.clipX0||dx>=scr.clipX1) continue;
+                int argb;
+                if(bpp<=8){
+                    int bitPos=(j*8+i)*bpp;
+                    int idx=(vm.read8(dataPtr+(bitPos>>3)) >> (bitPos&7)) & mask;   // LSB-first (igual drawObject)
+                    if((pixFmt==7 || transp) && idx==0) continue;
+                    argb = (pixFmt==7) ? scr.rgb332[idx&0xff] : scr.palette[(idx+palOff)&0xff];
+                } else {                                                            // 16bpp direto
+                    int v=vm.read16(dataPtr+(j*8+i)*2)&0xffff;
+                    if(transp && v==0) continue;
+                    argb = (pixFmt==8)? rgb565(v) : Screen.rgb555ToArgb(v);
+                }
+                scr.put(dx,dy,argb);
+            }
+        }
+    }
+
     // colisao AABB entre dois retangulos (top-left + w/h)
     static boolean aabb(int ax,int ay,int aw,int ah, int bx,int by,int bw,int bh){
         return ax < bx+bw && ax+aw > bx && ay < by+bh && ay+ah > by;
@@ -513,7 +637,7 @@ public final class Sdk {
                         int v=vm.read8(tp+j*TW+i)&0xff;
                         int argb=pal[v];
                         if(blackTransp && (argb&0xffffff)==0) continue;   // preto = transparente (mostra o fundo)
-                        scr.fb[dy*scr.w+dx]=argb;
+                        scr.put(dx,dy,argb);
                     }
                 }
             }
@@ -553,9 +677,80 @@ public final class Sdk {
         return sb.toString();
     }
 
+    // vCopyRect(VMGPSTRIDEPTR* dest, *source, u16 width, u16 height): copia um retangulo WxH de graficos 8bpp
+    // entre dois locais. STRIDEPTR{ptr@0, xpan@4(u16), ypan@6(u16), stride@8(s16)}; ptr==0 = a TELA em (0,0).
+    // Golf Pro Contest 1/2 desenham o MAPA/campo com isto (course 256x160 -> tela); antes era no-op -> chao
+    // preto(Golf1)/magenta(Golf2). Tela = RGB332 (Screen.rgb332), buffers do jogo tb; converte byte->ARGB no fb.
+    void copyRect(int dS,int sS,int w,int h){
+        w&=0xffff; h&=0xffff; if(w<=0||h<=0||w>4096||h>4096) return;
+        int dP=vm.read32(dS), dX=(short)vm.read16(dS+4), dY=(short)vm.read16(dS+6), dStr=(short)vm.read16(dS+8);
+        int sP=vm.read32(sS), sX=(short)vm.read16(sS+4), sY=(short)vm.read16(sS+6), sStr=(short)vm.read16(sS+8);
+        boolean dScr=(dP==0), sScr=(sP==0);
+        if(dScr && dStr==0) dStr=scr.w;
+        if(sScr && sStr==0) sStr=scr.w;
+        for(int y=0;y<h;y++){
+            for(int x=0;x<w;x++){
+                int b;                                              // pixel 8bpp de origem
+                if(sScr){ int sx=sX+x, sy=sY+y; if(sx<0||sx>=scr.w||sy<0||sy>=scr.h) continue; b=argbToRgb332(scr.get(sx,sy)); }
+                else    { b=vm.read8(sP + sX + (sY+y)*sStr + x) & 0xff; }
+                if(dScr){ int dx=dX+x, dy=dY+y; if(dx<0||dx>=scr.w||dy<0||dy>=scr.h) continue; scr.put(dx,dy,scr.rgb332[b]); }
+                else    { vm.write8(dP + dX + (dY+y)*dStr + x, b); }
+            }
+        }
+    }
+    // ARGB do framebuffer -> indice RGB332 aproximado (p/ copias screen->system, raro)
+    int argbToRgb332(int argb){ int r=(argb>>16)&0xff, g=(argb>>8)&0xff, bl=argb&0xff; return ((r>>5)<<5)|((g>>5)<<2)|(bl>>6); }
+
     int itoa(int val,int buf,boolean signed){
         String s = signed? Integer.toString(val) : Long.toString(val&0xffffffffL);
         int i=0; for(;i<s.length();i++) vm.write8(buf+i, s.charAt(i)); vm.write8(buf+i,0); return buf;
+    }
+
+    // ---------------- vSprintf / vSprintfVa (printf estilo C) ----------------
+    // vSprintf(buf, fmt, ...): varargs em p2,p3 e depois na PILHA (vm.arg cuida do split).
+    int sprintfReg(int buf,int fmt){ final int[] idx={2}; return sprintfImpl(buf, fmt, new java.util.function.IntSupplier(){ public int getAsInt(){ return vm.arg(idx[0]++); } }); }
+    // vSprintfVa(buf, fmt, ap): ap = ponteiro p/ o va_list (array de u32 na memoria da VM).
+    int sprintfVa(int buf,int fmt,final int ap){ final int[] off={0}; return sprintfImpl(buf, fmt, new java.util.function.IntSupplier(){ public int getAsInt(){ int v=vm.read32(ap+off[0]); off[0]+=4; return v; } }); }
+    int sprintfImpl(int buf,int fmt,java.util.function.IntSupplier args){
+        String s = formatC(readStr(fmt,false), args);
+        int i=0; for(; i<s.length() && i<8192; i++) vm.write8(buf+i, s.charAt(i));
+        vm.write8(buf+i, 0);
+        return buf;                                 // CRITICO: retorna buf (nao 0/null) — o jogo usa como char*
+    }
+    // formatador printf minimo: %d/%i/%u/%x/%X/%c/%s/%p/%%, com flags(-,0,+,espaco), largura e precisao.
+    String formatC(String fmt, java.util.function.IntSupplier args){
+        StringBuilder out=new StringBuilder(); int i=0, n=fmt.length();
+        while(i<n){
+            char c=fmt.charAt(i++);
+            if(c!='%'){ out.append(c); continue; }
+            if(i<n && fmt.charAt(i)=='%'){ out.append('%'); i++; continue; }
+            boolean left=false, zero=false, plus=false, space=false;
+            loop: while(i<n){ switch(fmt.charAt(i)){ case '-':left=true;i++;break; case '0':zero=true;i++;break; case '+':plus=true;i++;break; case ' ':space=true;i++;break; default: break loop; } }
+            int width=0; while(i<n && Character.isDigit(fmt.charAt(i))) width=width*10+(fmt.charAt(i++)-'0');
+            int prec=-1; if(i<n && fmt.charAt(i)=='.'){ i++; prec=0; while(i<n && Character.isDigit(fmt.charAt(i))) prec=prec*10+(fmt.charAt(i++)-'0'); }
+            while(i<n && (fmt.charAt(i)=='l'||fmt.charAt(i)=='h'||fmt.charAt(i)=='L')) i++;
+            if(i>=n) break;
+            char cv=fmt.charAt(i++); String piece;
+            switch(cv){
+                case 'd': case 'i': { int v=args.getAsInt(); piece=Integer.toString(v); if(v>=0){ if(plus)piece="+"+piece; else if(space)piece=" "+piece; } break; }
+                case 'u': piece=Long.toString(args.getAsInt()&0xffffffffL); break;
+                case 'x': piece=Integer.toHexString(args.getAsInt()); break;
+                case 'X': piece=Integer.toHexString(args.getAsInt()).toUpperCase(); break;
+                case 'o': piece=Integer.toOctalString(args.getAsInt()); break;
+                case 'c': piece=String.valueOf((char)(args.getAsInt()&0xff)); break;
+                case 'p': piece="0x"+Integer.toHexString(args.getAsInt()); break;
+                case 's': { int p=args.getAsInt(); piece = (p==0)?"":readStr(p,false); if(prec>=0 && piece.length()>prec) piece=piece.substring(0,prec); break; }
+                default: piece="%"+cv; break;
+            }
+            if(width>piece.length()){
+                int pad=width-piece.length();
+                if(left){ out.append(piece); for(int k=0;k<pad;k++) out.append(' '); }
+                else if(zero && cv!='s' && cv!='c' && piece.length()>0 && (piece.charAt(0)=='-'||piece.charAt(0)=='+'||piece.charAt(0)==' ')){
+                    out.append(piece.charAt(0)); for(int k=0;k<pad;k++) out.append('0'); out.append(piece.substring(1));
+                } else { char pc=(zero && cv!='s' && cv!='c')?'0':' '; for(int k=0;k<pad;k++) out.append(pc); out.append(piece); }
+            } else out.append(piece);
+        }
+        return out.toString();
     }
 
     // vGetCaps(queryType, buffer): preenche a struct e retorna 1. Video: {u16 size,flags,width,height}
@@ -563,9 +758,20 @@ public final class Sdk {
         if(buf==0) return 0;
         // CapsQueryType (nofun): Video=0, Input=1, Sound=2, Communication=3, System=4
         switch(queryType){
-            case 0:  // Video: {u16 size,flags,width,height}. flags = VideoCapsFlag.All (Render3D|ChangingOrientation)
+            case 0:  // Video (CAPS_VIDEO): VIDEOCAPS {u16 size, u16 flags, u16 width, u16 height} (vmgpcaps.h)
+                // flags: os 8 BITS BAIXOS = FORMATO grafico da tela (enum VideoFormats de vmgpvfmt.h);
+                // bits altos = VCAPS_3D(0x1000) e VCAPS_ORIENTATION(0x2000).
+                // VideoFormats: 0-5 = mono/gray/indexed<=16 cores; 6=IND256; 7=RGB332; 8=RGB565(16bpp)...
+                // "requires 256 colors" = formato >= 6. Reportamos **7 (RGB332)** = 256 cores diretas,
+                // o framebuffer real deste emulador. NAO setamos VCAPS_3D/ORIENTATION: jogos 2D simplistas
+                // (ex.: Black Deal) comparam o flags INTEIRO e rejeitam bits altos (0x3007 > 8 -> "256 colors");
+                // Deep Abyss (mascara) e os 3D (VRally2) aceitam 7 igual. Assim TODOS os "256 colors" passam.
+                // VCAPS_3D (0x1000): so anunciamos 3D quando o JOGO e 3D (importa vInit3D). Jogos 3D
+                // estritos (Anarchy Boxing 3D, Martial Arts 3D) checam flags&VCAPS_3D e abortam com
+                // "3D not supported!" se ausente; ja os 2D (Black Deal) comparam o flags inteiro e
+                // rejeitam bits altos. Como version150 = importa vInit3D, isso discrimina sem quebrar 2D.
                 vm.write16(buf+0, 8);
-                vm.write16(buf+2, 0x3000);
+                vm.write16(buf+2, videoFormat | (version150 ? 0x1000 : 0));
                 vm.write16(buf+4, scr.w);
                 vm.write16(buf+6, scr.h);
                 return 1;
@@ -617,7 +823,7 @@ public final class Sdk {
 
     // Flags de stream (StreamFlags.cs do nofun): Read=0x100, Write=0x200, Binary=0x400,
     // Create=0x800, Trunc=0x1000, MustNotExistBefore=0x2000.
-    static final int SF_READ=0x100, SF_WRITE=0x200, SF_CREATE=0x800, SF_TRUNC=0x1000;
+    static final int SF_READ=0x100, SF_WRITE=0x200, SF_BINARY=0x400, SF_CREATE=0x800, SF_TRUNC=0x1000, SF_EXCL=0x2000;
 
     // Abre um save em disco (pasta saveDir). Devolve o conteudo atual num buffer editavel; gravaveis
     // sao persistidos JA na abertura e a cada write (nao dependem do vStreamClose -> save robusto
@@ -634,7 +840,14 @@ public final class Sdk {
             try { data = readAllBytes(f); } catch(Exception e){ return -1; }
         } else if(write){                // gravavel sem existir -> OpenOrCreate (nofun): cria vazio
             data = new byte[0];
-        } else {                         // leitura de save inexistente -> falha (jogo sabe: sem "Continue")
+        } else if((mode & SF_BINARY)!=0 && (mode & SF_EXCL)==0){   // STREAM_EXCL(0x2000): jogo espera arquivo existir -> -1 (Da Vinci Code .clevel/.pan); sem EXCL = handle vazio (Deep Abyss)
+            // leitura BINARIA (STREAM_BINARY) de arquivo inexistente -> trata como arquivo de DADOS
+            // vazio (handle valido, 0 bytes), NAO como "sem save". Alguns jogos abrem um arquivo de
+            // dados que so passa a existir depois de criado; ex.: Deep Abyss multiscreen le 'level'
+            // (modo 0x500=Read|Binary) e, sem isto, recebia -1 -> "Failed to open mappack" -> terminava.
+            // Saves de "Continue"/highscore usam modo TEXTO (0x100, sem Binary) -> continuam recebendo -1.
+            data = new byte[0];
+        } else {                         // leitura TEXTO de save inexistente -> falha (jogo sabe: sem "Continue")
             return -1;
         }
         int fd = nextFd++;
@@ -651,7 +864,7 @@ public final class Sdk {
         try {
             java.io.FileOutputStream out = new java.io.FileOutputStream(f);
             try { out.write(data!=null? data : new byte[0]); } finally { out.close(); }
-        } catch(Exception e){ System.err.println("[save] falha ao gravar "+f+": "+e); }
+        } catch(Exception e){ System.err.println("[save] failed to write "+f+": "+e); }
     }
 
     // mapeia o nome logico do jogo ("resume"/"highscore") p/ um arquivo seguro em saveDir
@@ -702,7 +915,7 @@ public final class Sdk {
         if(f!=null && Boolean.TRUE.equals(streamWritable.get(handle))){
             byte[] data = streamData.get(handle);
             flushFile(f, data);           // grava final (redundante c/ o flush por write, mas garante)
-            if(trace) System.out.println("  [save] gravado "+f+" ("+(data!=null?data.length:0)+" bytes)");
+            if(trace) System.out.println("  [save] wrote "+f+" ("+(data!=null?data.length:0)+" bytes)");
         }
         streamData.remove(handle); streamPos.remove(handle);
         streamFile.remove(handle); streamWritable.remove(handle);
@@ -738,11 +951,19 @@ public final class Sdk {
             // toca so se for MIDI (SMF "MThd")
             if(bytes.length<4 || bytes[0]!='M'||bytes[1]!='T'||bytes[2]!='h'||bytes[3]!='d') return 1;
             stopSound();
-            MidiBridge.play(bytes, (flags & 0x100)!=0);
+            MidiBridge.play(reverb ? bytes : MidiReverb.kill(bytes), (flags & 0x100)!=0);
             return 1;
         } catch(Throwable e){ return 0; }   // sem dispositivo MIDI: nao trava o jogo
     }
+    // para o som ATUAL (MIDI + vozes), mas MANTEM o motor de audio vivo — usado ao pausar / trocar de MIDI.
+    // (antes fazia vsound.dispose() aqui -> derrubava o AudioTrack e o jogo, que so chama vSoundInit 1x,
+    //  ficava MUDO p/ sempre depois de qualquer pausa/MIDI.)
     public void stopSound(){
+        try { MidiBridge.stop(); } catch(Throwable e){}
+        try { if(vsound!=null) vsound.stopVoices(); } catch(Throwable e){}
+    }
+    // teardown COMPLETO do audio (fim da sessao / destruir a Activity).
+    public void disposeAudio(){
         try { MidiBridge.stop(); } catch(Throwable e){}
         try { if(vsound!=null) vsound.dispose(); } catch(Throwable e){}
     }
@@ -775,7 +996,7 @@ public final class Sdk {
             new java.io.BufferedInputStream(new java.io.FileInputStream(f)));
         try {
             int magic=in.readInt();
-            if(magic!=STATE_MAGIC && magic!=STATE_MAGIC2 && magic!=STATE_MAGIC3) throw new java.io.IOException("estado invalido");
+            if(magic!=STATE_MAGIC && magic!=STATE_MAGIC2 && magic!=STATE_MAGIC3) throw new java.io.IOException("invalid state");
             int nr=in.readInt(); for(int i=0;i<nr;i++){ int v=in.readInt(); if(i<vm.R.length) vm.R[i]=v; }
             int ml=in.readInt(); byte[] m=new byte[ml]; in.readFully(m);
             System.arraycopy(m,0,vm.mem,0,Math.min(ml,vm.mem.length));
@@ -795,7 +1016,8 @@ public final class Sdk {
             else { tick0=System.currentTimeMillis()-3600000L; }
             if(magic==STATE_MAGIC3){                          // restaura o framebuffer (fundo persistente)
                 int fl=in.readInt();
-                for(int i=0;i<fl;i++){ int v=in.readInt(); if(i<scr.fb.length) scr.fb[i]=v; }
+                boolean apply=(fl==scr.fb.length);
+                for(int i=0;i<fl;i++){ int v=in.readInt(); if(apply) scr.fb[i]=v; }
             }
         } finally { in.close(); }
     }

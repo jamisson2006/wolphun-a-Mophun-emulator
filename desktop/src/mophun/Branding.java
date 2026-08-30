@@ -20,7 +20,7 @@ public final class Branding {
     private Branding(){}
 
     public static final String APP_NAME = "wolphun emulator";
-    public static final String VERSION  = "0.1.0";          // primeira beta publica
+    public static final String VERSION  = "0.2.0";          // 2a beta: soundfont NDK, temas, fix VM (JPl) + varias features
     public static final String CHANNEL  = "beta";            // canal de lancamento
     public static final String VENDOR   = "Maned Software";  // "estudio" (mascote: lobo-guara/maned wolf)
     public static final String AUTHOR   = "Jamisson Tavares";

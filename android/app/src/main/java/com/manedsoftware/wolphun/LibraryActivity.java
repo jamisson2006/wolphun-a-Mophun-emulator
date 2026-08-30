@@ -54,11 +54,18 @@ public final class LibraryActivity extends AppCompatActivity {
         fab.setOnClickListener(new View.OnClickListener(){
             public void onClick(View v){ openPicker(); }
         });
+        Theme.apply(this, cfg);
 
         requestStoragePermission();
     }
 
-    @Override protected void onResume(){ super.onResume(); reload(); }
+    @Override protected void onResume(){
+        super.onResume();
+        cfg = PrefsConfig.load(this);        // recarrega (idioma/tema podem ter mudado nas Settings)
+        Lang.setByCode(cfg.language);
+        reload();
+        Theme.apply(this, cfg);
+    }
 
     // ---- permissão de armazenamento (a caixa "Permitir") p/ ler /sdcard/mophun ----
     private static final int REQ_PERM = 2002;
@@ -74,44 +81,54 @@ public final class LibraryActivity extends AppCompatActivity {
         if(req==REQ_PERM) reload();   // com permissão, re-escaneia a pasta compartilhada
     }
 
-    // ---- importar via seletor de arquivos (SAF) ----
+    // ---- importar via seletor de arquivos (SAF) — MULTIPLA selecao (bulk installer) ----
     private void openPicker(){
         Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         i.addCategory(Intent.CATEGORY_OPENABLE);
         i.setType("*/*");                       // .mpn não tem MIME padrão -> qualquer arquivo
+        i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);   // permite selecionar VARIAS ROMs de uma vez
         try { startActivityForResult(i, REQ_PICK); }
-        catch(Throwable t){ toast("Sem app de arquivos disponível"); }
+        catch(Throwable t){ toast(Lang.t("imp.nofileapp")); }
     }
 
     @Override protected void onActivityResult(int req, int res, Intent data){
         super.onActivityResult(req, res, data);
-        if(req==REQ_PICK && res==RESULT_OK && data!=null && data.getData()!=null)
-            importRom(data.getData());
+        if(req!=REQ_PICK || res!=RESULT_OK || data==null) return;
+        final List<Uri> uris = new ArrayList<Uri>();
+        if(data.getClipData()!=null){                    // selecao multipla
+            android.content.ClipData cd = data.getClipData();
+            for(int i=0;i<cd.getItemCount();i++){ Uri u=cd.getItemAt(i).getUri(); if(u!=null) uris.add(u); }
+        } else if(data.getData()!=null){                 // selecao unica
+            uris.add(data.getData());
+        }
+        if(!uris.isEmpty()) importRoms(uris);
     }
 
-    private void importRom(final Uri uri){
-        final String display = queryName(uri);
+    private void importRoms(final List<Uri> uris){
         new Thread(new Runnable(){ public void run(){
-            String msg;
-            try {
-                InputStream in = getContentResolver().openInputStream(uri);
-                byte[] bytes = MophunCrypt.readAll(in);
-                in.close();
-                boolean decrypted = false;
-                if(MophunCrypt.looksEncrypted(bytes)){
-                    byte[] dec = MophunCrypt.decrypt(bytes);
-                    if(dec!=null){ bytes = dec; decrypted = true; }
-                }
-                String base = stripExt(display==null ? "jogo" : display);
-                File out = uniqueFile(PrefsConfig.romsDir(LibraryActivity.this), base);
-                MophunCrypt.writeAll(out, bytes);
-                msg = decrypted ? ("Importado e descriptografado: "+base) : ("Importado: "+base);
-            } catch(Throwable t){
-                msg = "Falha ao importar: "+t;
+            int ok=0, fail=0;
+            for(Uri uri : uris){
+                try {
+                    String display = queryName(uri);
+                    InputStream in = getContentResolver().openInputStream(uri);
+                    byte[] bytes = MophunCrypt.readAll(in);
+                    in.close();
+                    if(MophunCrypt.looksEncrypted(bytes)){
+                        byte[] dec = MophunCrypt.decrypt(bytes);
+                        if(dec!=null){ bytes = dec; }
+                    }
+                    String base = stripExt(display==null ? "game" : display);
+                    File out = uniqueFile(PrefsConfig.romsDir(LibraryActivity.this), base);
+                    MophunCrypt.writeAll(out, bytes);
+                    ok++;
+                } catch(Throwable t){ fail++; }
             }
-            final String fmsg = msg;
-            runOnUiThread(new Runnable(){ public void run(){ toast(fmsg); reload(); }});
-        }}, "import-rom").start();
+            final int fok=ok, ffail=fail;
+            runOnUiThread(new Runnable(){ public void run(){
+                toast(ffail==0 ? Lang.t("imp.bulkok", fok) : Lang.t("imp.bulkpart", fok, ffail));
+                reload();
+            }});
+        }}, "import-roms").start();
     }
 
     private static File uniqueFile(File dir, String base){
@@ -162,6 +179,82 @@ public final class LibraryActivity extends AppCompatActivity {
         }
     }
     static String stripExt(String n){ int i=n.lastIndexOf('.'); return i>0? n.substring(0,i) : n; }
+
+    // toque longo -> menu do jogo (resolucao / apagar dados / desinstalar)
+    private void showGameMenu(final GameEntry g){
+        final String[] items = { Lang.t("gm.resolution"), Lang.t("gm.cleardata"), Lang.t("uninst.ok") };
+        new android.app.AlertDialog.Builder(this)
+            .setTitle(g.name)
+            .setItems(items, (d, which) -> {
+                switch(which){
+                    case 0: chooseResolution(g); break;
+                    case 1: confirmClearData(g); break;
+                    case 2: confirmUninstall(g); break;
+                }
+            })
+            .setNegativeButton(Lang.t("btn.cancel"), null)
+            .show();
+    }
+
+    // muda a resolucao (modelo de aparelho) SO deste jogo; "Auto" = detecta pelo nome do arquivo
+    private void chooseResolution(final GameEntry g){
+        final String[] items = new String[PrefsConfig.MODEL_NAMES.length + 1];
+        items[0] = Lang.t("res.auto");
+        for(int i=0;i<PrefsConfig.MODEL_NAMES.length;i++) items[i+1] = PrefsConfig.MODEL_NAMES[i];
+        int cur = PrefsConfig.getGameModel(this, g.name) + 1;   // -1(auto)->0 ; modelo m -> m+1
+        if(cur<0 || cur>=items.length) cur=0;
+        new android.app.AlertDialog.Builder(this)
+            .setTitle(Lang.t("gm.resolution"))
+            .setSingleChoiceItems(items, cur, (d, which) -> {
+                PrefsConfig.setGameModel(this, g.name, which-1);   // 0->auto(-1) ; i -> i-1
+                d.dismiss();
+                toast(Lang.t("res.set"));
+            })
+            .setNegativeButton(Lang.t("btn.cancel"), null)
+            .show();
+    }
+
+    // apaga SO os dados (saves/estados) do jogo, mantendo a ROM
+    private void confirmClearData(final GameEntry g){
+        new android.app.AlertDialog.Builder(this)
+            .setTitle(Lang.t("gm.cleardata"))
+            .setMessage(Lang.t("cleardata.msg", g.name))
+            .setPositiveButton(Lang.t("gm.cleardata"), (d, w) -> {
+                try { deleteDir(PrefsConfig.savesDir(this, g.name)); } catch(Throwable t){}
+                toast(Lang.t("cleardata.done", g.name));
+            })
+            .setNegativeButton(Lang.t("btn.cancel"), null)
+            .show();
+    }
+
+    // toque longo -> desinstalar (apaga o .mpn) com confirmacao
+    private void confirmUninstall(final GameEntry g){
+        new android.app.AlertDialog.Builder(this)
+            .setTitle(Lang.t("uninst.title"))
+            .setMessage(Lang.t("uninst.msg", g.name))
+            .setPositiveButton(Lang.t("uninst.ok"), (d, w) -> uninstall(g))
+            .setNegativeButton(Lang.t("btn.cancel"), null)
+            .show();
+    }
+    private void uninstall(GameEntry g){
+        boolean ok = false;
+        try { ok = g.file.delete(); } catch(Throwable t){ ok = false; }
+        if(ok){
+            // remove tambem a pasta de saves/estados + a miniatura (desinstalacao completa)
+            try { deleteDir(PrefsConfig.savesDir(this, g.name)); } catch(Throwable t){}
+            try { PrefsConfig.thumbFile(this, g.name).delete(); } catch(Throwable t){}
+            toast(Lang.t("uninst.done", g.name));
+        } else {
+            toast(Lang.t("uninst.fail"));   // ex.: ROM na pasta compartilhada sem permissao de escrita
+        }
+        reload();
+    }
+    private static void deleteDir(File d){
+        if(d==null || !d.exists()) return;
+        File[] fs = d.listFiles();
+        if(fs!=null) for(File f: fs){ if(f.isDirectory()) deleteDir(f); else f.delete(); }
+        d.delete();
+    }
 
     private void launch(GameEntry g){
         Intent i = new Intent(this, EmulatorActivity.class);
@@ -227,14 +320,28 @@ public final class LibraryActivity extends AppCompatActivity {
             int model = PrefsConfig.detectModel(g.file.getName());
             String tag = model>=0 ? PrefsConfig.MODEL_NAMES[model] : "multiscreen";
             h.subtitle.setText(tag);
+            // icone = miniatura do gameplay (capturada ao jogar), senao o logo padrao
+            android.graphics.Bitmap thumb = null;
+            try { File tf = PrefsConfig.thumbFile(LibraryActivity.this, g.name);
+                  if(tf.isFile()) thumb = android.graphics.BitmapFactory.decodeFile(tf.getAbsolutePath()); } catch(Throwable t){}
+            if(thumb!=null) h.icon.setImageBitmap(thumb); else h.icon.setImageResource(R.drawable.wolphun_logo);
+            // cores/fonte do tema nos itens da lista
+            Theme t = Theme.resolve(cfg);
+            android.graphics.Typeface tf = Theme.typeface(t.font);
+            h.title.setTextColor(t.fg); h.title.setTypeface(tf, android.graphics.Typeface.BOLD);
+            h.subtitle.setTextColor((t.fg & 0x00FFFFFF) | 0x99000000); h.subtitle.setTypeface(tf);
             h.itemView.setOnClickListener(new View.OnClickListener(){
                 public void onClick(View v){ launch(g); }
+            });
+            h.itemView.setOnLongClickListener(new View.OnLongClickListener(){
+                public boolean onLongClick(View v){ showGameMenu(g); return true; }
             });
         }
         @Override public int getItemCount(){ return games.size(); }
     }
     static final class VH extends RecyclerView.ViewHolder {
         final TextView title, subtitle;
-        VH(View v){ super(v); title=v.findViewById(R.id.title); subtitle=v.findViewById(R.id.subtitle); }
+        final android.widget.ImageView icon;
+        VH(View v){ super(v); title=v.findViewById(R.id.title); subtitle=v.findViewById(R.id.subtitle); icon=v.findViewById(R.id.icon); }
     }
 }

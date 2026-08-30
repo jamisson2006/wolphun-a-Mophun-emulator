@@ -18,6 +18,112 @@
             android:paddingTop="8dp"
             android:paddingBottom="8dp" />
 
+        <Switch
+            android:id="@+id/reverb"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Echo (reverb)"
+            android:textSize="16sp"
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp" />
+
+        <Button
+            android:id="@+id/soundfont"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Soundfont (.sf2)" />
+
+        <TextView
+            android:id="@+id/apTitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Appearance"
+            android:textStyle="bold"
+            android:textSize="16sp"
+            android:paddingTop="18dp" />
+
+        <TextView
+            android:id="@+id/themeLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Theme"
+            android:textSize="14sp"
+            android:paddingTop="10dp" />
+
+        <Spinner
+            android:id="@+id/themeSpin"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content" />
+
+        <TextView
+            android:id="@+id/fontLabel2"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Font"
+            android:textSize="14sp"
+            android:paddingTop="10dp" />
+
+        <Spinner
+            android:id="@+id/fontSpin"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content" />
+
+        <TextView
+            android:id="@+id/sizeLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="14sp"
+            android:paddingTop="10dp" />
+
+        <SeekBar
+            android:id="@+id/fontSizeBar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:paddingTop="10dp">
+
+            <Button
+                android:id="@+id/swBg"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_margin="2dp"
+                android:textSize="10sp"
+                android:text="BG" />
+
+            <Button
+                android:id="@+id/swPanel"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_margin="2dp"
+                android:textSize="10sp"
+                android:text="Panel" />
+
+            <Button
+                android:id="@+id/swText"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_margin="2dp"
+                android:textSize="10sp"
+                android:text="Text" />
+
+            <Button
+                android:id="@+id/swAccent"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_margin="2dp"
+                android:textSize="10sp"
+                android:text="Accent" />
+        </LinearLayout>
+
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -63,6 +169,30 @@
 
         <SeekBar
             android:id="@+id/screenTop"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content" />
+
+        <TextView
+            android:id="@+id/fontLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="16sp"
+            android:paddingTop="16dp" />
+
+        <SeekBar
+            android:id="@+id/fontScale"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content" />
+
+        <TextView
+            android:id="@+id/hdLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="16sp"
+            android:paddingTop="16dp" />
+
+        <SeekBar
+            android:id="@+id/hdScale"
             android:layout_width="match_parent"
             android:layout_height="wrap_content" />
     </LinearLayout>

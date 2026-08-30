@@ -27,22 +27,58 @@ public final class GameSession {
     /** monta a VM e a tela (na thread da UI). Depois adicione getCanvas() a uma janela e chame start(). */
     public void init() throws Exception {
         exe = Vmgp.load(mpnFile.getAbsolutePath());
-        // modelo/resolucao: detecta pelo nome ([T300]/[T610]/...); multiscreen/desconhecido usa o default
+        // modelo/resolucao — cadeia de deteccao automatica por jogo:
+        //   1) tag de modelo no nome ([T610]/[7650]/...) -> mais forte (define terminal E resolucao);
+        //   2) tag de resolucao [LxA] ou screenshot -> resolucao nativa + modelo canonico p/ CheckTerminal;
+        //   3) nada detectado -> default global do usuario (Settings).
         int model = GameLibrary.detectModel(mpnFile);
         int w, h;
         if(model>=0){ int[] r = Config.resForModel(model); w=r[0]; h=r[1]; }
-        else { model = cfg.deviceModel; w=cfg.width; h=cfg.height; }
-        scr = new Screen(w, h, cfg.scale, false, true);   // embutido
+        else {
+            int[] res = GameLibrary.detectRes(mpnFile);
+            if(res!=null){
+                w=res[0]; h=res[1];
+                int canon = Config.modelForRes(w,h);      // modelo/vendor coerentes com a resolucao
+                model = (canon>=0)? canon : cfg.deviceModel;
+            } else {
+                model = cfg.deviceModel; w=cfg.width; h=cfg.height;
+            }
+        }
+        // auto-fit do zoom: a janela (w*scale x h*scale) nao pode passar da tela fisica,
+        // senao ela abre fora dos limites e o jogo aparece "preto"/cortado. Clampa o scale
+        // ao maior que couber (deixando margem p/ barra de titulo + menu + taskbar).
+        int scale = clampScaleToScreen(w, h, cfg.scale);
+        scr = new Screen(w, h, scale, false, true, cfg.renderScale);   // embutido; renderScale = supersampling HD
         scr.keyMap = cfg.screenKeyMap();
         scr.targetFps = cfg.targetFps;
         scr.gamma = cfg.gamma;
+        scr.setFontScale(cfg.fontScale);
         vm  = new Pip2(exe, 4*1024*1024, 256*1024);
         sdk = new Sdk(vm, scr);
         sdk.soundEnabled = cfg.sound;
+        sdk.soundFont    = cfg.soundFont;
+        sdk.reverb       = cfg.reverb;
         sdk.deviceModel  = model;
         sdk.deviceVendor = Config.vendorForModel(model);
         sdk.saveDir = cfg.savesDir(gameName);
         vm.sdk = sdk;
+        vm.runConstructors();   // construtores globais C++ ("~C") antes do main (ex.: HC1 inicializa entidades/sprites)
+    }
+
+    /** Maior zoom (>=1) para o qual a janela w*scale x h*scale ainda cabe na tela fisica,
+     *  limitado ao 'want' pedido. Evita janela maior que o monitor (jogo "preto"/cortado)
+     *  em resolucoes altas (ex.: 208x320) — o gargalo real do "nao passa de 4x". */
+    static int clampScaleToScreen(int w, int h, int want){
+        if(want < 1) want = 1;
+        try {
+            java.awt.Rectangle scr = java.awt.GraphicsEnvironment
+                .getLocalGraphicsEnvironment().getMaximumWindowBounds();   // ja desconta a taskbar
+            int availW = scr.width  - 24;    // margem p/ bordas da janela
+            int availH = scr.height - 80;    // margem p/ barra de titulo + barra de menu
+            int fit = Math.min(availW / Math.max(1,w), availH / Math.max(1,h));
+            if(fit < 1) fit = 1;
+            return Math.min(want, fit);
+        } catch(Throwable t){ return want; }   // headless/sem display: mantem o pedido
     }
 
     public Canvas getCanvas(){ return scr.getCanvas(); }
@@ -71,7 +107,7 @@ public final class GameSession {
             // parada solicitada
         } catch(Throwable t){
             error = t.toString();
-            System.err.println("[sessao] excecao @instr "+(vm!=null?vm.instr:-1)+": "+t);
+            System.err.println("[session] exception @instr "+(vm!=null?vm.instr:-1)+": "+t);
             t.printStackTrace();
         } finally {
             running=false;

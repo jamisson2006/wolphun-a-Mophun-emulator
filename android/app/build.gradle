@@ -3,13 +3,31 @@ apply plugin: 'com.android.application'
 android {
     compileSdkVersion 29
     buildToolsVersion "29.0.3"
+    ndkVersion '30.0.16138531 rc3'       // NDK instalado (synth de SoundFont em C)
 
     defaultConfig {
         applicationId "com.manedsoftware.wolphun"
         minSdkVersion 24          // Android 7.0 (o alvo mínimo)
         targetSdkVersion 29
-        versionCode 1
-        versionName "0.1.0-beta"
+        versionCode 2
+        versionName "0.2.0-beta"
+
+        // NDK: synth de SoundFont (.sf2) em C -> TinySoundFont + TinyMidiLoader
+        externalNativeBuild {
+            cmake {
+                cppFlags "-O2"
+            }
+        }
+        ndk {
+            abiFilters "armeabi-v7a", "arm64-v8a", "x86", "x86_64"
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path "src/main/cpp/CMakeLists.txt"
+            version "3.10.2"
+        }
     }
 
     compileOptions {
@@ -25,6 +43,13 @@ android {
 
     lintOptions {
         abortOnError false
+    }
+
+    // O AGP 3.6.4 (antigo) tenta "strip" as .so com ferramentas GCC que o NDK r30 removeu
+    // (so tem llvm-strip) -> "CreateProcess error=2". doNotStrip pula esse passo (a .so fica
+    // um pouco maior, com simbolos de debug, mas funciona 100%).
+    packagingOptions {
+        doNotStrip "**/*.so"
     }
 }
 
