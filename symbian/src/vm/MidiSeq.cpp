@@ -1,8 +1,8 @@
-/* MidiSeq.cpp - ver MidiSeq.h. Sequenciador de SMF: converte o arquivo numa lista de
-   mensagens MIDI com instante em microssegundos. Nenhuma sintese acontece aqui. */
+/* MidiSeq.cpp - see MidiSeq.h. An SMF sequencer: it turns the file into a list of MIDI
+   messages timestamped in microseconds. No synthesis happens here. */
 #include "MidiSeq.h"
 
-/* ---------------- leitura big-endian / quantidade de tamanho variavel ---------------- */
+/* ---------------- big-endian reads and variable-length quantities ---------------- */
 
 static inline u32 rdBE32(const u8* d, int o)
 {
@@ -12,7 +12,7 @@ static inline int rdBE16(const u8* d, int o)
 {
     return ((int)d[o] << 8) | (int)d[o+1];
 }
-/* VLQ: 7 bits uteis por byte, bit 7 = "continua". Max 4 bytes pelo padrao SMF. */
+/* VLQ: 7 useful bits per byte, bit 7 means "continues". At most 4 bytes per the SMF standard. */
 static u32 readVarLen(const u8* d, int aEnd, int& p)
 {
     u32 v = 0;
@@ -25,7 +25,7 @@ static u32 readVarLen(const u8* d, int aEnd, int& p)
     return v;
 }
 
-/* ---------------- ciclo de vida ---------------- */
+/* ---------------- life cycle ---------------- */
 
 MidiSeq::MidiSeq()
 : iMsg(0), iCount(0), iNext(0), iDurationUs(0), iChannelMask(0)
@@ -40,9 +40,9 @@ void MidiSeq::Clear()
     iCount = 0; iNext = 0; iDurationUs = 0; iChannelMask = 0;
 }
 
-/* Ordenacao ESTAVEL por tick. Precisa ser estavel porque eventos de faixas diferentes
-   no mesmo tick tem de manter a ordem em que foram lidos (um program change antes do
-   note on da mesma faixa, por exemplo). Merge sort: n log n, sem recursao profunda. */
+/* A STABLE sort by tick. Stability matters because events from different tracks can
+   land on the same tick and must keep the order they were read in -- a program change
+   before the note on of the same track, for one. Merge sort: n log n, with no deep recursion. */
 void MidiSeq::MergeSort(Raw* a, Raw* tmp, int n)
 {
     for (int w = 1; w < n; w *= 2)
@@ -55,7 +55,7 @@ void MidiSeq::MergeSort(Raw* a, Raw* tmp, int n)
             if (rEnd > n) rEnd = n;
             while (l < lEnd && r < rEnd)
             {
-                /* <= mantem a estabilidade: empate fica com o da esquerda */
+                /* <= preserves stability: on a tie the left-hand one wins */
                 if (a[l].tick <= a[r].tick) tmp[k++] = a[l++];
                 else                        tmp[k++] = a[r++];
             }
@@ -66,7 +66,7 @@ void MidiSeq::MergeSort(Raw* a, Raw* tmp, int n)
     }
 }
 
-/* ---------------- interpretacao do SMF ---------------- */
+/* ---------------- parsing the SMF ---------------- */
 
 bool MidiSeq::Load(const u8* smf, int len)
 {
@@ -80,8 +80,8 @@ bool MidiSeq::Load(const u8* smf, int len)
 
     const int ntracks = rdBE16(smf, 10);
     int division      = rdBE16(smf, 12);
-    /* Divisao SMPTE (bit 15) nao aparece nos recursos mophun; cair num padrao e melhor
-       que recusar o som. */
+    /* SMPTE division (bit 15) does not appear in Mophun's resources; falling back to a
+       default beats refusing the sound. */
     if (division & 0x8000) division = 96;
     if (division <= 0)     division = 96;
 
@@ -89,12 +89,12 @@ bool MidiSeq::Load(const u8* smf, int len)
     if (!raw) return false;
     int nRaw = 0;
 
-    /* mapa de andamento: (tick, microssegundos por seminima). O padrao MIDI e 120 BPM. */
+    /* the tempo map: (tick, microseconds per quarter note). The MIDI default is 120 BPM. */
     u32 tempoTick[KMaxTempos];
     u32 tempoUs[KMaxTempos];
     int nTempo = 0;
 
-    u32 order = 0;        /* ordem global de leitura, para a ordenacao estavel */
+    u32 order = 0;        /* global read order, used by the stable sort */
     u32 maxTick = 0;
 
     int p = 8 + (int)hdrLen;
@@ -104,7 +104,7 @@ bool MidiSeq::Load(const u8* smf, int len)
         const u32 tlen = rdBE32(smf, p + 4);
         int q   = p + 8;
         int end = q + (int)tlen;
-        if (end > len) end = len;       /* faixa truncada: le o que der */
+        if (end > len) end = len;       /* a truncated track: read what there is */
         p = end;
 
         u32 tick = 0;
@@ -118,9 +118,9 @@ bool MidiSeq::Load(const u8* smf, int len)
             u8 status = smf[q];
             if (status & 0x80) { q++; }
             else               { status = running; }    /* running status */
-            if (status == 0) break;                     /* fluxo corrompido */
+            if (status == 0) break;                     /* corrupt stream */
 
-            if (status == 0xFF)                         /* meta */
+            if (status == 0xFF)                         /* meta event */
             {
                 if (q >= end) break;
                 const u8 type = smf[q++];
@@ -133,10 +133,10 @@ bool MidiSeq::Load(const u8* smf, int len)
                     nTempo++;
                 }
                 q += (int)mlen;
-                if (type == 0x2F) break;                /* fim de faixa */
+                if (type == 0x2F) break;                /* end of track */
                 continue;
             }
-            if (status == 0xF0 || status == 0xF7)       /* sysex: o aparelho nao precisa */
+            if (status == 0xF0 || status == 0xF7)       /* sysex: the phone does not need it */
             {
                 const u32 slen = readVarLen(smf, end, q);
                 q += (int)slen;
@@ -169,17 +169,17 @@ bool MidiSeq::Load(const u8* smf, int len)
 
     if (nRaw == 0){ delete[] raw; return false; }
 
-    /* As faixas vem concatenadas, cada uma ordenada por si; a ordenacao estavel por tick
-       as intercala corretamente (SMF formato 1 = faixas paralelas). */
+    /* The tracks arrive concatenated, each sorted within itself; the stable sort by
+       tick interleaves them correctly (SMF format 1 means parallel tracks). */
     if (nRaw > 1)
     {
         Raw* tmp = new Raw[nRaw];
         if (tmp){ MergeSort(raw, tmp, nRaw); delete[] tmp; }
-        /* sem memoria para o temporario: segue na ordem de leitura. O formato 0 (uma
-           faixa so) ja esta correto, e e o caso comum nos efeitos do mophun. */
+        /* No memory for the scratch buffer: carry on in read order. Format 0, a single
+           track, is already correct, and that is the common case for Mophun's effects. */
     }
 
-    /* o mapa de andamento costuma vir todo na faixa 0, ja em ordem; garante mesmo assim */
+    /* the tempo map usually sits entirely in track 0 and is already ordered; make sure anyway */
     for (int i = 1; i < nTempo; i++)
     {
         const u32 kt = tempoTick[i], ku = tempoUs[i];
@@ -191,12 +191,12 @@ bool MidiSeq::Load(const u8* smf, int len)
     iMsg = new Msg[nRaw];
     if (!iMsg){ delete[] raw; return false; }
 
-    /* ticks -> microssegundos, aplicando as trocas de andamento no caminho.
-       us += deltaTicks * usPorSeminima / ticksPorSeminima  (em 64 bits: o produto
-       estoura 32 bits facil -- 1000 ticks x 500000 us ja passa de 2^31). */
+    /* ticks -> microseconds, applying the tempo changes along the way.
+       us += deltaTicks * usPerQuarter / ticksPerQuarter, in 64 bits: the product
+       overflows 32 bits easily -- 1000 ticks x 500000 us already exceeds 2^31. */
     u64 usAcc   = 0;
     u32 lastTick = 0;
-    u32 tempo    = 500000;      /* 120 BPM, padrao do SMF quando nao ha FF 51 */
+    u32 tempo    = 500000;      /* 120 BPM, the SMF default when there is no FF 51 */
     int ti       = 0;
 
     for (int i = 0; i < nRaw; i++)

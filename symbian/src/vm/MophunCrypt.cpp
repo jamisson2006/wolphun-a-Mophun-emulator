@@ -1,17 +1,17 @@
-/* MophunCrypt.cpp - ver MophunCrypt.h */
+/* MophunCrypt.cpp - see MophunCrypt.h */
 #include "MophunCrypt.h"
 #include "MophunKeys.h"
 
-/* ============================ bignum de 1024 bits ============================
- * O Java usava BigInteger; o Symbian nao tem nada equivalente sem OpenC, entao aqui
- * vai o minimo necessario para calcular meta^3 mod N: comparar, subtrair, multiplicar
- * e reduzir modulo N. Numeros sao 32 limbs de 32 bits, limb 0 = menos significativo
- * (a mesma ordem little-endian dos bytes do arquivo).
- * Tudo em variaveis locais: nenhuma alocacao, nenhuma dependencia.
+/* ============================ 1024-bit bignum ============================
+ * The Java version used BigInteger; Symbian has nothing equivalent without OpenC, so
+ * what follows is the minimum needed to compute meta^3 mod N: compare, subtract,
+ * multiply and reduce modulo N. Numbers are 32 limbs of 32 bits, limb 0 being the
+ * least significant -- the same little-endian order as the bytes in the file.
+ * Everything lives in locals: no allocation, no dependencies.
  */
 static const int L = kMophunLimbs;          /* 32 limbs = 1024 bits */
 
-/* -1, 0 ou +1 */
+/* -1, 0 or +1 */
 static int bnCmp(const u32* a, const u32* b, int n)
 {
     for (int i = n - 1; i >= 0; i--)
@@ -19,7 +19,7 @@ static int bnCmp(const u32* a, const u32* b, int n)
     return 0;
 }
 
-/* a -= b (assume a >= b) */
+/* a -= b, assuming a >= b */
 static void bnSub(u32* a, const u32* b, int n)
 {
     u32 borrow = 0;
@@ -27,7 +27,7 @@ static void bnSub(u32* a, const u32* b, int n)
     {
         u64 t = (u64)a[i] - (u64)b[i] - (u64)borrow;
         a[i] = (u32)t;
-        /* se houve emprestimo os 32 bits altos viram 0xFFFFFFFF */
+        /* if a borrow happened, the high 32 bits become 0xFFFFFFFF */
         borrow = (u32)((t >> 32) & 1u);
     }
 }
@@ -59,9 +59,9 @@ static void bnMul(const u32* a, const u32* b, u32* prod)
     }
 }
 
-/* out[L] = prod[2L] mod n[L], por deslocamento-e-subtracao bit a bit.
-   E o metodo mais simples de acertar (sem estimativa de quociente) e roda uma unica
-   vez por ROM: 2048 iteracoes, imperceptivel mesmo no ARM do aparelho. */
+/* out[L] = prod[2L] mod n[L], by bit-by-bit shift and subtract.
+   It is the easiest method to get right -- no quotient estimation -- and it runs
+   exactly once per ROM: 2048 iterations, imperceptible even on the phone's ARM. */
 static void bnMod(const u32* prod, const u32* n, u32* out)
 {
     u32 r[L + 1];
@@ -73,7 +73,7 @@ static void bnMod(const u32* prod, const u32* n, u32* out)
 
     for (int bit = 2 * L * 32 - 1; bit >= 0; bit--)
     {
-        /* r = (r << 1) | bit do produto */
+        /* r = (r << 1) | the next bit of the product */
         u32 carry = (prod[bit >> 5] >> (bit & 31)) & 1u;
         for (i = 0; i <= L; i++)
         {
@@ -94,7 +94,7 @@ static void bnMulMod(const u32* a, const u32* b, const u32* n, u32* out)
     bnMod(prod, n, out);
 }
 
-/* out = a^3 mod n  (expoente 3: dois quadrados/produtos, sem laco de exponenciacao) */
+/* out = a^3 mod n. With exponent 3 that is two multiplies, so no exponentiation loop. */
 static void bnModPow3(const u32* a, const u32* n, u32* out)
 {
     u32 t[L];
@@ -102,11 +102,11 @@ static void bnModPow3(const u32* a, const u32* n, u32* out)
     bnMulMod(t, a, n, out);
 }
 
-/* ============================ XTEA de 32 bits ============================
- * Traducao direta do decryptblock do MophunDecrypt (Source.cpp), que o Java ja
- * reproduzia registrador por registrador. No Java cada operacao terminava em "& M"
- * para simular 32 bits dentro de um long; aqui as variaveis JA sao u32, entao o
- * truncamento e automatico e as mascaras somem. A sequencia e identica.
+/* ============================ 32-bit XTEA ============================
+ * A direct translation of MophunDecrypt's decryptblock (Source.cpp), which the Java
+ * version already reproduced register by register. In Java every operation ended in
+ * "& M" to simulate 32 bits inside a long; here the variables ALREADY are u32, so the
+ * truncation is automatic and the masks disappear. The sequence is identical.
  */
 static u32 decryptblock(u32 block, const u32* key)
 {
@@ -211,10 +211,10 @@ static u32 decryptblock(u32 block, const u32* key)
     return r0;
 }
 
-/* ============================ recurso META e chave ============================ */
+/* ============================ the META resource and the key ============================ */
 
-/* A tabela de recursos comeca em resOff: uma lista de offsets u32 terminada em 0.
-   O recurso "META" tem 9 bytes de cabecalho antes dos 0x98 bytes uteis. */
+/* The resource table starts at resOff: a list of u32 offsets terminated by a 0.
+   The "META" resource has a 9-byte header before its 0x98 useful bytes. */
 static const u8* findMeta(const u8* d, int len, int resOff)
 {
     if (resOff < 0 || resOff + 4 > len) return 0;
