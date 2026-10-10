@@ -1,21 +1,22 @@
-/* MophunModel.h - qual aparelho o emulador diz ser, e com que resolucao.
+/* MophunModel.h - which handset the emulator claims to be, and at what resolution.
  *
- * Portado de GameLibrary.detectModel/detectRes e da tabela de modelos do Config.java.
+ * Ported from GameLibrary.detectModel/detectRes and the model table in Config.java.
  *
- * POR QUE ISTO EXISTE: os jogos mophun que NAO sao "multiscreen" perguntam o modelo do
- * aparelho (vGetCaps System -> deviceId) e abortam com "Terminal not supported!" se nao
- * reconhecem a resposta. Sem isto, todo jogo marcado [T300], [T610] etc. morre em ~30
- * instrucoes e a tela fica preta. O modelo tambem define a resolucao nativa dos assets.
+ * WHY THIS EXISTS: Mophun games that are not "multiscreen" ask for the handset model
+ * (vGetCaps System -> deviceId) and abort with "Terminal not supported!" if they do not
+ * recognise the answer. Without this, every game tagged [T300], [T610] and so on dies
+ * within about 30 instructions and the screen stays black. The model also decides the
+ * native resolution of the assets.
  *
- * O nome do arquivo e a unica pista disponivel (o proprio emulador de PC faz assim).
- * Portavel: so char*, sem STL/libc/Symbian.
+ * The file name is the only clue available -- the PC emulator does the same thing.
+ * Portable: plain char*, no STL, no libc, no Symbian.
  */
 #ifndef MOPHUNMODEL_H
 #define MOPHUNMODEL_H
 
 #include "vmcommon.h"
 
-/* indices de SystemDeviceModel (do nofun), iguais aos do emulador de PC */
+/* SystemDeviceModel indices (from nofun), the same ones the PC emulator uses */
 struct MophunModel
 {
     enum { kCount = 16 };
@@ -41,10 +42,10 @@ struct MophunModel
     static int VendorFor(int aModel)
     { return (aModel >= 0 && aModel < kCount) ? VendorTable()[aModel] : 3; }
 
-    /* minusculas ASCII */
+    /* ASCII lowercase */
     static char Lower(char c){ return (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c; }
 
-    /* o nome contem 'needle' (comparacao sem acentos, so ASCII minusculo)? */
+    /* does the name contain 'needle'? comparison is plain lowercase ASCII, no accents */
     static bool Has(const char* name, const char* needle)
     {
         for (int i = 0; name[i]; i++)
@@ -56,11 +57,11 @@ struct MophunModel
         return false;
     }
 
-    /* Modelo deduzido do nome do arquivo; -1 = multiscreen/desconhecido (adaptativo). */
+    /* Model deduced from the file name; -1 = multiscreen or unknown, i.e. adaptive. */
     static int FromName(const char* name)
     {
         if (!name) return -1;
-        if (Has(name, "multiscreen") || Has(name, "miltiscreen")) return -1;  /* typo real do acervo */
+        if (Has(name, "multiscreen") || Has(name, "miltiscreen")) return -1;  /* a real typo in the archive */
         if (Has(name, "t300")) return 0;
         if (Has(name, "t310")) return 1;
         if (Has(name, "t226") || Has(name, "t230")) return 5;
@@ -78,8 +79,8 @@ struct MophunModel
         return -1;
     }
 
-    /* Resolucao nativa pela etiqueta [LARGURAxALTURA] no nome (ex.: "..._[176x208]_...").
-       Devolve true e preenche w/h. */
+    /* Native resolution from a [WIDTHxHEIGHT] tag in the name, as in
+       "..._[176x208]_...". Returns true and fills in w/h. */
     static bool ResFromTag(const char* name, int* w, int* h)
     {
         if (!name) return false;
@@ -101,13 +102,13 @@ struct MophunModel
         return false;
     }
 
-    /* Resolucao a usar no modo automatico: modelo conhecido > etiqueta [LxA] > padrao. */
+    /* Resolution for automatic mode: a known model first, then a [WxH] tag, then the default. */
     static void AutoRes(const char* name, int* w, int* h)
     {
         const int m = FromName(name);
         if (m >= 0){ if (w) *w = ResWTable()[m]; if (h) *h = ResHTable()[m]; return; }
         if (ResFromTag(name, w, h)) return;
-        if (w) *w = 176;            /* multiscreen: retrato S60 classico */
+        if (w) *w = 176;            /* multiscreen: the classic S60 portrait */
         if (h) *h = 208;
     }
 };

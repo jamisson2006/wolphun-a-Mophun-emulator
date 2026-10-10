@@ -1,8 +1,8 @@
-/* WolphunConfig.h - configuracoes POR JOGO, persistidas no diretorio privado do app.
+/* WolphunConfig.h - PER-GAME settings, persisted in the app's private directory.
  *
- * Cada ROM (.mpn) tem o seu arquivo "<nome>.cfg". A resolucao e por jogo porque os
- * jogos mophun foram feitos para aparelhos diferentes: o jogo le o tamanho da tela em
- * vGetCaps na INICIALIZACAO, entao trocar a resolucao reinicia a sessao.
+ * Each ROM (.mpn) gets its own "<name>.cfg". Resolution is per game because Mophun
+ * titles were built for different handsets: a game reads the screen size through
+ * vGetCaps at STARTUP, so changing the resolution restarts the session.
  */
 #ifndef WOLPHUNCONFIG_H
 #define WOLPHUNCONFIG_H
@@ -11,58 +11,60 @@
 #include <f32file.h>
 #include <badesca.h>     /* CDesCArrayFlat */
 
-/* Resolucoes: as mesmas dos modelos reais que o emulador de PC mapeia (Config.java),
-   mais as duas QVGA dos aparelhos Nokia modernos. */
+/* Resolutions: the ones from the real handsets the PC emulator maps (Config.java),
+   plus the two QVGA modes of the newer Nokia devices. */
 enum TWolphunRes {
     EWolphunRes101x80 = 0,
     EWolphunRes128x160,
-    EWolphunRes176x208,     /* padrao: S60 retrato */
+    EWolphunRes176x208,     /* the default: S60 portrait */
     EWolphunRes176x220,
     EWolphunRes208x320,
     EWolphunRes240x320,
-    EWolphunRes320x240,     /* E-series paisagem */
-    /* Automatico: deduz do PROPRIO jogo (modelo [T300]/[T610]... ou etiqueta
-       [LxA] no nome). Novo indice no FIM para nao invalidar os .cfg ja salvos. */
+    EWolphunRes320x240,     /* E-series landscape */
+    /* Automatic: deduced from THE GAME ITSELF, either a model tag ([T300], [T610]...)
+       or a [WxH] tag in the name. A new index goes at the END so the .cfg files already
+       saved stay valid. */
     EWolphunResAuto,
     EWolphunResCount
 };
 
 enum TWolphunScaling {
-    EWolphunScaleCenter = 0,    /* 1:1 centralizado (mais nitido) */
-    EWolphunScaleAspect,        /* amplia mantendo proporcao */
-    EWolphunScaleFill           /* preenche a tela */
+    EWolphunScaleCenter = 0,    /* centred 1:1, the sharpest */
+    EWolphunScaleAspect,        /* scale up keeping the aspect ratio */
+    EWolphunScaleFill           /* fill the screen */
 };
 
 enum TWolphunKeyProfile {
-    EWolphunKeysAuto = 0,       /* detecta pelo aparelho */
-    EWolphunKeysQwerty,         /* WASD + espaco (E-series) */
-    EWolphunKeysNumeric,        /* teclado 2/4/6/8/5 */
+    EWolphunKeysAuto = 0,       /* detected from the handset */
+    EWolphunKeysQwerty,         /* WASD + space (E-series) */
+    EWolphunKeysNumeric,        /* the 2/4/6/8/5 keypad */
     EWolphunKeysJoystickOnly,
-    EWolphunKeysCustom,         /* so o mapa livre de iBind (Configuracoes > Editar teclas) */
+    EWolphunKeysCustom,         /* only iBind's free map (Settings > Edit keys) */
     EWolphunKeyProfileCount
 };
 
-/* Acoes do jogo que podem receber tecla. A ORDEM e gravada no .cfg: nao reordenar,
-   so acrescentar no fim. Espelha o modelo do emulador de PC (Config.ACTIONS). */
+/* Game actions that can be bound to a key. The ORDER is written into the .cfg, so do
+   not reorder, only append. Mirrors the PC emulator's model (Config.ACTIONS). */
 enum TWolphunAction {
     EWolphunActUp = 0, EWolphunActDown, EWolphunActLeft, EWolphunActRight,
     EWolphunActFire, EWolphunActFire2, EWolphunActSelect,
-    /* TECLAS LITERAIS. Muitos jogos nao leem so os bits de botao: leem a tecla do telefone
-       crua por vTestKey/vScanKeys (o Bomb Jack anda com 2 e 3). Num aparelho QWERTY como o
-       E63 nao existe teclado numerico para pressionar, entao sem poder remapear esses jogos
-       ficam injogaveis. A ORDEM e gravada no .cfg: so acrescentar no fim. */
+    /* LITERAL KEYS. Many games do not read only the button bits: they read the raw
+       handset key through vTestKey/vScanKeys (Bomb Jack moves with 2 and 3). A QWERTY
+       device like the E63 has no numeric keypad to press, so without remapping those
+       games are unplayable. The ORDER is written into the .cfg: only append. */
     EWolphunActKey0, EWolphunActKey1, EWolphunActKey2, EWolphunActKey3, EWolphunActKey4,
     EWolphunActKey5, EWolphunActKey6, EWolphunActKey7, EWolphunActKey8, EWolphunActKey9,
     EWolphunActKeyHash, EWolphunActKeyStar,
-    /* TECLAS DO APARELHO (vmgpsonyericsson.h: KEY_SONYERICSSON_NO = 203, _CLEAR = 204).
-       Nao existe bit de botao equivalente: viajam pelo mesmo caminho das teclas literais.
-       O emulador de PC ja as oferecia; o Symbian nao enviava nenhuma das duas. Achadas por
-       analise estatica das ROMs: Ice Digger / Bomb Jack / SAAF pedem 203, 4-in-1 pede 204. */
+    /* HANDSET KEYS (vmgpsonyericsson.h: KEY_SONYERICSSON_NO = 203, _CLEAR = 204).
+       There is no equivalent button bit, so they travel the same path as the literal
+       keys. The PC emulator already offered them; Symbian was sending neither. Found by
+       static analysis of the ROMs: Ice Digger, Bomb Jack and SAAF ask for 203, 4-in-1
+       asks for 204. */
     EWolphunActPhoneBack, EWolphunActPhoneClear,
     EWolphunActionCount
 };
-/* Quantas teclas por acao. 3 cobre d-pad + QWERTY + numerico simultaneos, que e
-   exatamente o que o perfil "Automatico" ja fazia. */
+/* How many keys per action. Three covers d-pad, QWERTY and numeric simultaneously,
+   which is exactly what the "Automatic" profile already did. */
 const TInt KWolphunKeysPerAction = 3;
 
 class TWolphunConfig
@@ -71,74 +73,74 @@ public:
     TWolphunConfig();
     void SetDefaults();
 
-    /* dimensoes correspondentes ao indice de resolucao */
+    /* the dimensions for a given resolution index */
     static TSize ResolutionSize(TInt aIndex);
 
     TInt iResolution;      /* TWolphunRes */
     TInt iScaling;         /* TWolphunScaling */
     TInt iKeyProfile;      /* TWolphunKeyProfile */
-    TInt iSound;           /* 0 = desligado, 1 = ligado */
-    TInt iTexFilter;       /* 0 = segue o jogo, 1 = bilinear, 2 = nearest */
+    TInt iSound;           /* 0 = off, 1 = on */
+    TInt iTexFilter;       /* 0 = follow the game, 1 = bilinear, 2 = nearest */
 
-    /* Mapa LIVRE de teclas: scan code do Symbian (TStdScanCode ou 'W'/'2'), 0 = vazio.
-       So vale quando iKeyProfile == EWolphunKeysCustom; assim os quatro perfis antigos
-       continuam funcionando exatamente como antes para quem nao quiser mexer. */
+    /* FREE key map: a Symbian scan code (TStdScanCode, or 'W'/'2'), 0 = empty.
+       It only applies when iKeyProfile == EWolphunKeysCustom, so the four original
+       profiles keep behaving exactly as before for anyone who does not want to fiddle. */
     TInt iBind[EWolphunActionCount][KWolphunKeysPerAction];
 
-    /* ECONOMIA DE BATERIA: 0=maxima, 1=alta (padrao), 2=media, 3=desligada.
-       Nao e enfeite. Depois que o rasterizador ficou rapido, um Nokia E63 com bateria
-       gasta DESLIGA SOZINHO no Rally Pro Contest em alta velocidade: os LEDs do teclado
-       apagam, o brilho cai e ele reinicia com a logo -- queda de tensao sob carga
-       sustentada. Cada nivel limita o CICLO DE TRABALHO da CPU (quanto tempo a VM roda
-       dentro de cada tique de 20 ms), que e o que a bateria sente; limitar so os quadros
-       nao resolve, porque numa cena pesada o jogo ja esta abaixo do teto.
-       Campo NO FIM da struct de proposito: o .cfg e despejo cru e o ReadIntoL le o
-       prefixo por cima dos padroes, entao config antiga continua valendo. */
+    /* BATTERY SAVING: 0 = maximum, 1 = high (default), 2 = medium, 3 = off.
+       This is not decoration. Once the rasterizer got fast, a Nokia E63 with a worn
+       battery SWITCHES ITSELF OFF in Rally Pro Contest at speed: the keyboard LEDs go
+       out, the brightness drops and it reboots showing the logo -- a voltage sag under
+       sustained load. Each level limits the CPU DUTY CYCLE (how long the VM runs inside
+       each 20 ms tick), which is what the battery actually feels; capping frames alone
+       does not help, because in a heavy scene the game is already below the cap.
+       Deliberately at the END of the struct: the .cfg is a raw dump and ReadIntoL reads
+       a prefix of it over the defaults, so an older config stays valid. */
     TInt iPowerSave;
 
-    /* IDIOMA DA INTERFACE: 0=English (padrao), 1=Espanol, 2=Deutsch, 3=Portugues,
-       4=Ukrainian, 5=Russian -- a MESMA ordem do desktop (src/mophun/Lang.java), para
-       que o indice salvo signifique o mesmo nos dois. Tambem NO FIM da struct. */
-    /* Tecla que alterna a TELA CHEIA (scancode do Symbian; 0 = nenhuma).
-       Fica no FIM da struct como os anteriores: a config e gravada como BLOCO
-       BRUTO e lida por prefixo, entao campo novo no meio invalidaria os .cfg
-       que ja existem no aparelho. */
+    /* Key that toggles FULLSCREEN (a Symbian scan code; 0 = none).
+       At the END of the struct like the ones above: the config is written as a RAW
+       BLOCK and read back by prefix, so a new field in the middle would invalidate the
+       .cfg files already on the phone. */
     TInt iFullKey;
 
-    /* vibracao do aparelho no vSysCtl(SYSCTL_SETVIBRATE): 0 = desligada, 1 = ligada.
-       No FIM da struct como os anteriores -- a config e um bloco bruto lido por
-       prefixo, campo novo no meio invalidaria os .cfg que ja estao no aparelho. */
+    /* Device vibration for vSysCtl(SYSCTL_SETVIBRATE): 0 = off, 1 = on.
+       At the END of the struct for the same reason as the others. */
     TInt iVibrate;
 
+    /* UI LANGUAGE: 0 = English (default), 1 = Espanol, 2 = Deutsch, 3 = Portugues,
+       4 = Ukrainian, 5 = Russian -- the SAME order as the desktop
+       (src/mophun/Lang.java), so a stored index means the same thing in both.
+       Also at the END of the struct. */
     TInt iLanguage;
 
-    /** Bit do Screen correspondente a acao (UP=0x01 ... FIRE2=0x100). */
+    /** The Screen bit matching this action (UP=0x01 ... FIRE2=0x100). */
     static TInt ActionBit(TInt aAction);
-    /** Nome curto da acao, para a tela de edicao. */
-    /* Devolve por VALOR: o texto vem de WolphunLang::T(), que monta um TPtrC na
-       hora. Devolver const TDesC& seria referencia a temporario. */
+    /** Short name of the action, for the key-editing screen. */
+    /* Returned BY VALUE: the text comes from WolphunLang::T(), which builds a TPtrC on
+       the spot. Returning const TDesC& would be a reference to a temporary. */
     static TPtrC ActionName(TInt aAction);
-    /** ASCII da tecla literal do telefone ('0'..'9','#','*'), ou -1 se for acao de botao. */
+    /** ASCII of the literal handset key ('0'..'9','#','*'), or -1 for a button action. */
     static TInt ActionAscii(TInt aAction);
 };
 
-/* Carrega/grava a configuracao de um jogo no diretorio privado do app. */
+/* Loads and saves a game's configuration in the app's private directory. */
 class CWolphunConfigStore : public CBase
 {
 public:
     static CWolphunConfigStore* NewL(RFs& aFs);
     ~CWolphunConfigStore();
 
-    /* aRomName = nome do arquivo da ROM (sem caminho). */
+    /* aRomName = the ROM's file name, without a path. */
     void LoadL(const TDesC& aRomName, TWolphunConfig& aCfg);
     void SaveL(const TDesC& aRomName, const TWolphunConfig& aCfg);
 
-    /* Padrao do SISTEMA (global.cfg): herdado por jogos que ainda nao tem .cfg proprio,
-       para o usuario nao ter de refazer o mapa de teclas em cada jogo novo. */
+    /* SYSTEM defaults (global.cfg): inherited by games that have no .cfg of their own
+       yet, so the user does not have to redo the key map for every new game. */
     void LoadGlobalL(TWolphunConfig& aCfg);
     void SaveGlobalL(const TWolphunConfig& aCfg);
 
-    /* diretorio privado (tambem usado para os saves nativos dos jogos) */
+    /* the private directory, also used for the games' native saves */
     const TDesC& PrivatePath() const { return iPrivatePath; }
 
 private:
@@ -152,9 +154,9 @@ private:
 };
 
 /* ---------------------------------------------------------------------------
- * Lista de PASTAS DE JOGOS gerenciada pelo usuario (adicionar/remover varias).
- * "Abrir jogo" varre TODAS elas de uma vez (bulk), em vez de ficar preso a um
- * caminho fixo. Persistida em <privado>\folders.txt, um caminho por linha.
+ * The list of GAME FOLDERS, managed by the user (add and remove as many as wanted).
+ * "Open game" scans ALL of them at once instead of being tied to one fixed path.
+ * Persisted in <private>\folders.txt, one path per line.
  * -------------------------------------------------------------------------*/
 class CWolphunFolders : public CBase
 {
@@ -165,8 +167,8 @@ public:
     TInt Count() const;
     TPtrC At(TInt aIndex) const;
 
-    /* Adiciona se ainda nao existir (comparacao sem diferenciar maiusculas).
-       Devolve EFalse se ja estava na lista. */
+    /* Adds it if it is not there yet; the comparison ignores case.
+       Returns EFalse if it was already in the list. */
     TBool AddL(const TDesC& aPath);
     void  RemoveL(TInt aIndex);
     void  SaveL();

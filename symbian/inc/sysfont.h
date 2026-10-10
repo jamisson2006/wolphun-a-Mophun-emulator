@@ -1,8 +1,8 @@
-/* sysfont.h - fonte bitmap do sistema para o port Symbian (GERADA automaticamente).
- * Origem: fonte SansSerif do Java, em-size 8, altura de linha 10px,
- * ASCII 32..126, proporcional. Mesma fonte base do Screen.java original, para o texto
- * dos jogos (vTextOut/vPrint sem fonte propria) sair equivalente ao emulador de PC.
- * Cada glifo = 10 linhas u16; bit 0 = coluna mais a esquerda (LSB-first). */
+/* sysfont.h - the system bitmap font for the Symbian port (AUTOMATICALLY GENERATED).
+ * Source: Java's SansSerif, em-size 8, 10px line height, ASCII 32..126, proportional.
+ * It is the same base font the original Screen.java used, so game text drawn through
+ * vTextOut/vPrint (when the game brings no font of its own) matches the PC emulator.
+ * Each glyph is 10 u16 rows; bit 0 is the leftmost column (LSB-first). */
 #ifndef WOLPHUN_SYSFONT_H
 #define WOLPHUN_SYSFONT_H
 
@@ -11,7 +11,7 @@
 #define SYSFONT_HEIGHT  10
 #define SYSFONT_MAXW    8
 
-/* largura em pixels de cada caractere (proporcional) */
+/* width in pixels of each character (the font is proportional) */
 static const unsigned char kSysFontW[] = {
     2,3,3,4,4,7,5,2,3,3,3,5,2,3,2,2,4,4,4,4,4,4,4,4,
     4,4,2,2,5,5,5,4,8,5,5,6,6,5,5,6,6,2,4,5,4,7,6,6,
@@ -19,7 +19,7 @@ static const unsigned char kSysFontW[] = {
     4,2,2,3,2,6,4,4,4,5,3,4,2,4,3,5,3,3,4,3,3,3,5,
 };
 
-/* 10 linhas por caractere */
+/* 10 rows per character */
 static const unsigned short kSysFontBits[] = {
     0x0000,0x0000,0x0000,0x0000,0x0000,0x0000,0x0000,0x0000,0x0000,0x0000,   /* ' ' */
     0x0000,0x0000,0x0002,0x0002,0x0002,0x0002,0x0000,0x0002,0x0000,0x0000,   /* '!' */

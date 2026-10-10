@@ -1,12 +1,12 @@
-/* WolphunLang.h - textos da interface em 6 idiomas (i18n).
+/* WolphunLang.h - the interface strings in 6 languages (i18n).
  *
- * Mesma logica do desktop (src/mophun/Lang.java): a MESMA ordem de idiomas
- * (en, es, de, pt, uk, ru), INGLES como padrao e o idioma guardado na config.
- * Diferenca: aqui a chave e um enum, nao texto -- sem mapa de strings no
- * aparelho, a busca vira indexacao direta.
+ * Same scheme as the desktop (src/mophun/Lang.java): the SAME language order
+ * (en, es, de, pt, uk, ru), ENGLISH as the default, and the choice stored in the
+ * config. The difference is that the key here is an enum rather than text, so there is
+ * no string map on the phone and a lookup is a direct index.
  *
- * O .cpp escapa TODO caractere nao-ASCII como \xNNNN: nao da para confiar em
- * como o GCCE de 2007 interpreta UTF-8 dentro de um literal L"".
+ * The .cpp escapes EVERY non-ASCII character as \xNNNN: the 2007 GCCE cannot be
+ * trusted to interpret UTF-8 inside an L"" literal.
  */
 #ifndef WOLPHUNLANG_H
 #define WOLPHUNLANG_H
