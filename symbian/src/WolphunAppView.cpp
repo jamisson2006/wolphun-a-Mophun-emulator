@@ -1,4 +1,4 @@
-/* WolphunAppView.cpp - ver WolphunAppView.h */
+/* WolphunAppView.cpp - see WolphunAppView.h */
 #include "WolphunAppView.h"
 #include "WolphunEngine.h"
 #include "WolphunConfig.h"
@@ -30,14 +30,15 @@ CWolphunAppView::~CWolphunAppView()
 void CWolphunAppView::ConstructL(const TRect& aRect)
 {
     CreateWindowL();
-    /* Contexto de fundo do SKIN, dando ao emulador a aparencia nativa da Nokia.
-     ERA KAknsIIDQsnBgAreaMain com o rect do CONTROLE, e isso deixava uma FAIXA PRETA
-     na parte de baixo: esse item do tema e o papel de parede do "main pane", cujo
-     bitmap tem a altura do main pane padrao; o que sobrasse do nosso controle ficava
-     sem pintar nenhuma -- e, por nao ser pintado, acumulava sujeira de desenhos
-     anteriores (o "smearing").
-     KAknsIIDQsnBgScreen e o fundo da TELA INTEIRA e, com o rect da tela (nao o do
-     controle), o contexto cobre tudo sem faixa nem resto. */
+    /* The SKIN background context, which gives the emulator Nokia's native look.
+     It USED to be KAknsIIDQsnBgAreaMain with the CONTROL's rectangle, and that left a
+     BLACK BAND along the bottom: that theme item is the wallpaper of the "main pane",
+     whose bitmap is only as tall as the standard main pane, so whatever of our control
+     stuck out past it was never painted -- and, being unpainted, accumulated leftovers
+     from earlier drawing, the smearing.
+     KAknsIIDQsnBgScreen is the WHOLE SCREEN's background and, given the screen's
+     rectangle rather than the control's, the context covers everything with no band and
+     nothing left over. */
     TRect screen;
     AknLayoutUtils::LayoutMetricsRect(AknLayoutUtils::EScreen, screen);
     iBgContext = CAknsBasicBackgroundControlContext::NewL(
@@ -49,7 +50,7 @@ void CWolphunAppView::ConstructL(const TRect& aRect)
 
 void CWolphunAppView::SizeChanged()
 {
-    /* o contexto segue a TELA, nao o controle (ver ConstructL) */
+    /* the context follows the SCREEN, not the control (see ConstructL) */
     if (iBgContext)
     {
         TRect screen;
@@ -58,7 +59,7 @@ void CWolphunAppView::SizeChanged()
     }
 }
 
-/* Entrega o contexto de skin para o framework (e para controles filhos). */
+/* Hands the skin context to the framework, and to any child controls. */
 TTypeUid::Ptr CWolphunAppView::MopSupplyObject(TTypeUid aId)
 {
     if (iBgContext) return MAknsControlContext::SupplyMopObject(aId, iBgContext);
@@ -68,27 +69,28 @@ TTypeUid::Ptr CWolphunAppView::MopSupplyObject(TTypeUid aId)
 void CWolphunAppView::SetStatusText(const TDesC& aText)
 {
     HBufC* copy = aText.Alloc();
-    if (!copy) return;                 /* sem memoria: mantem o texto anterior */
+    if (!copy) return;                 /* out of memory: keep the previous text */
     delete iStatus;
     iStatus = copy;
     DrawDeferred();
 }
 
-/* Onde o quadro do jogo cai na tela (aDst) e que parte do quadro e usada (aSrc).
+/* Where the game's frame lands on screen (aDst) and which part of it is used (aSrc).
  *
- * O "Preencher a tela" ESTICAVA o quadro ate o retangulo inteiro. Numa tela LANDSCAPE
- * -- 320x240 do E63, do E5, da maioria dos S60 3rd -- com um jogo RETRATO de 176x208, a
- * conta da deformacao e 320/176 = 1,82x na horizontal contra 196/208 = 0,94x na vertical:
- * quase o DOBRO de esticamento num eixo so. Era isso que achatava o carro do Rally Pro.
+ * "Fill the screen" used to STRETCH the frame to the whole rectangle. On a LANDSCAPE
+ * display -- the 320x240 of the E63, the E5 and most S60 3rd devices -- with a PORTRAIT
+ * 176x208 game, the distortion works out as 320/176 = 1.82x horizontally against
+ * 196/208 = 0.94x vertically: nearly TWICE the stretch on one axis. That is what
+ * flattened the car in Rally Pro Contest.
  *
- * Agora ele AMPLIA MANTENDO A PROPORCAO ate a tela ficar cheia e corta o excesso pelas
- * bordas -- o que "preencher" quer dizer em qualquer interface (o object-fit: cover do
- * CSS). Nunca deforma. Em troca, com proporcoes muito diferentes ele esconde parte do
- * quadro; quem precisa ver TUDO usa "Ampliar mantendo proporcao", o modo vizinho, que
- * mostra o quadro inteiro e deixa barra nas laterais.
+ * It now SCALES UP KEEPING THE ASPECT RATIO until the screen is full and crops the
+ * overflow at the edges -- what "fill" means in any interface (CSS's object-fit:
+ * cover). It never distorts. In exchange, with very different aspect ratios it hides
+ * part of the frame; anyone who needs to see ALL of it uses "Scale keeping aspect", the
+ * neighbouring mode, which shows the whole frame and leaves bars at the sides.
  *
- * O tamanho vem do BITMAP, nao do GameSize(): aSrc tem de estar em coordenadas do
- * bitmap, e os dois podem divergir se o jogo trocar de modo depois do AllocBitmapL.
+ * The size comes from the BITMAP, not from GameSize(): aSrc has to be in bitmap
+ * coordinates, and the two can diverge if the game changes mode after AllocBitmapL.
  */
 void CWolphunAppView::GameRects(TRect& aDst, TRect& aSrc) const
 {
@@ -105,27 +107,28 @@ void CWolphunAppView::GameRects(TRect& aDst, TRect& aSrc) const
 
     if (mode == EWolphunScaleAspect)
     {
-        /* CABER: a maior ampliacao que ainda mostra o quadro INTEIRO. Sobra barra. */
+        /* CONTAIN: the largest scale that still shows the WHOLE frame. Bars remain. */
         const TInt sx = (area.Width()  * 1000) / game.iWidth;
         const TInt sy = (area.Height() * 1000) / game.iHeight;
         const TInt s  = Min(sx, sy);
         const TSize out((game.iWidth * s) / 1000, (game.iHeight * s) / 1000);
         aDst = TRect(TPoint(area.iTl.iX + (area.Width()  - out.iWidth)  / 2,
                             area.iTl.iY + (area.Height() - out.iHeight) / 2), out);
-        return;   /* origem = quadro inteiro */
+        return;   /* source = the whole frame */
     }
 
     if (mode == EWolphunScaleFill)
     {
-        /* COBRIR: o destino ja e a area inteira; quem encolhe e a ORIGEM, para um recorte
-           CENTRADO com a proporcao da tela. Um eixo usa o quadro todo e o outro e cortado
-           -- nunca os dois, e nunca ha deformacao. Comparacao cruzada para decidir qual
-           eixo manda, sem divisao e sem ponto flutuante. */
+        /* COVER: the destination is already the whole area; it is the SOURCE that
+           shrinks, to a CENTRED crop with the screen's aspect ratio. One axis uses the
+           entire frame and the other is cropped -- never both, and never any distortion.
+           A cross-multiplication decides which axis wins, with no division and no
+           floating point. */
         TSize src = game;
         if (area.Width() * game.iHeight >= area.Height() * game.iWidth)
-            src.iHeight = (game.iWidth  * area.Height()) / area.Width();   /* corta em cima/baixo */
+            src.iHeight = (game.iWidth  * area.Height()) / area.Width();   /* crop top and bottom */
         else
-            src.iWidth  = (game.iHeight * area.Width())  / area.Height();  /* corta nos lados */
+            src.iWidth  = (game.iHeight * area.Width())  / area.Height();  /* crop the sides */
         if (src.iWidth  < 1) src.iWidth  = 1;
         if (src.iHeight < 1) src.iHeight = 1;
         aSrc = TRect(TPoint((game.iWidth  - src.iWidth)  / 2,
@@ -133,8 +136,8 @@ void CWolphunAppView::GameRects(TRect& aDst, TRect& aSrc) const
         return;
     }
 
-    /* EWolphunScaleCenter: 1:1 DE VERDADE. Se o quadro for maior que a area, mostra o
-       MIOLO em escala 1:1 -- antes ele era ENCOLHIDO para caber, o que nao e 1:1. */
+    /* EWolphunScaleCenter: a REAL 1:1. If the frame is larger than the area, it shows
+       the MIDDLE of it at 1:1 -- it used to be SHRUNK to fit, which is not 1:1. */
     const TSize src(Min(game.iWidth, area.Width()), Min(game.iHeight, area.Height()));
     aSrc = TRect(TPoint((game.iWidth  - src.iWidth)  / 2,
                         (game.iHeight - src.iHeight) / 2), src);

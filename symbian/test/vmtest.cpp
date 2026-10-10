@@ -1,9 +1,9 @@
-/* vmtest.cpp - harness de desktop para o nucleo portavel (sem Symbian).
- * Carrega um .mpn, monta Vmgp + Pip2 + Screen + Sdk REAIS e executa o jogo,
- * mostrando o que foi efetivamente desenhado. Opcionalmente grava o framebuffer
- * num .ppm para inspecao visual.
+/* vmtest.cpp - a desktop harness for the portable core, with no Symbian.
+ * It loads a .mpn, builds the REAL Vmgp + Pip2 + Screen + Sdk and runs the game,
+ * reporting what was actually drawn. Optionally it writes the framebuffer to a .ppm
+ * for visual inspection.
  *
- * Uso: vmtest [caminho.mpn] [maxInstr] [saida.ppm]
+ * Usage: vmtest [path.mpn] [maxInstr] [output.ppm]
  */
 #include "Vmgp.h"
 #include "Pip2.h"
@@ -15,23 +15,23 @@
 #include <stdlib.h>
 #include <time.h>
 
-/* ---- host do Screen: tempo e "apresentacao" (aqui so conta frames) ---- */
+/* ---- the Screen host: time and "presentation", which here just counts frames ---- */
 class TestHost : public ScreenHost {
 public:
     TestHost() : frames(0), start(clock()), scr(0) { vclock = 0; }
     void Present(){
         frames++;
-        /* autoplay simples: pulsa FIRE a cada 25 frames p/ atravessar menus e entrar no
-           jogo (o emulador de PC tem o mesmo recurso p/ testes headless). */
+        /* Simple autoplay: pulse FIRE every 25 frames to get through menus and into
+           the game. The PC emulator has the same facility for headless testing. */
         if (scr){
             bool fire = (frames % 25) >= 10 && (frames % 25) < 13;
             scr->setButtonBit(Screen::FIRE, fire);
         }
     }
     Screen* scr;
-    /* WPVTICK=<passo>: tempo VIRTUAL (avanca <passo> ms por leitura). Sem isto o relogio
-       e real e o jogo evolui diferente a cada execucao -- impossivel comparar dois
-       renderizadores quadro a quadro. */
+    /* WPVTICK=<step>: VIRTUAL time, advancing <step> ms per read. Without it the clock
+       is real and the game evolves differently on every run, which makes comparing two
+       renderers frame by frame impossible. */
     u32  TickMs(){
         static const char* vt = getenv("WPVTICK");
         if (vt){ vclock += atoi(vt); return (u32)vclock; }
@@ -53,7 +53,7 @@ public:
     clock_t start;
 };
 
-/* ---- sistema de arquivos de teste: saves em ./saves ---- */
+/* ---- the test file system: saves go in ./saves ---- */
 class TestFs : public SdkFileSystem {
 public:
     u8* ReadSave(const char* name, int* outLen){
@@ -78,7 +78,7 @@ public:
     }
 };
 
-/* ---- saida de som de teste: so registra o que vPlayResource entrega ---- */
+/* ---- the test sound output: it only logs what vPlayResource hands over ---- */
 class TestAudio : public SdkAudio {
 public:
     TestAudio(): calls(0), midi(0){ magic[0]=0; }
@@ -113,7 +113,7 @@ int main(int argc, char** argv){
     const char* path = (argc>1) ? argv[1] : "honeycave2.mpn";
     i64 maxInstr = (argc>2) ? atoi(argv[2]) : 20000000;
     const char* ppm = (argc>3) ? argv[3] : 0;
-    /* nome do arquivo sem o diretorio: e dele que sai o modelo do aparelho */
+    /* the file name without its directory: this is what the handset model comes from */
     const char* base = path;
     for (const char* p2 = path; *p2; p2++) if (*p2=='/' || *p2=='\\') base = p2+1;
     int autoW = 176, autoH = 208;
@@ -144,35 +144,35 @@ int main(int argc, char** argv){
     TestHost host;
     TestFs   fsys;
     TestAudio aud;
-    /* 320x240 = alvo Nokia E-series (paisagem, QWERTY) */
+    /* 320x240 = the Nokia E-series target (landscape, QWERTY) */
     Screen* scr = new Screen(scrW, scrH, &host);
     host.scr = scr;
     Pip2*   vm  = new Pip2(exe, heap, stack);
     Sdk*    sdk = new Sdk(vm, scr);
     sdk->fs = &fsys;
     sdk->audio = &aud;
-    /* modelo do aparelho pelo nome do arquivo: jogos nao-multiscreen abortam com
-       "Terminal not supported!" se a resposta de vGetCaps nao for uma que conhecem. */
+    /* The handset model comes from the file name: non-multiscreen games abort with
+       "Terminal not supported!" if vGetCaps answers with something they do not know. */
     {
         int m = MophunModel::FromName(base);
-        if (argc>6) m = atoi(argv[6]);     /* forca o modelo, p/ diagnostico */
+        if (argc>6) m = atoi(argv[6]);     /* force the model, for diagnostics */
         if (m >= 0){
             sdk->deviceModel  = m;
             sdk->deviceVendor = MophunModel::VendorFor(m);
             printf("modelo detectado: %d (vendor %d)\n", m, sdk->deviceVendor);
         } else printf("modelo: multiscreen/desconhecido (padrao T610)\n");
     }
-    /* o renderer 3D so e criado quando o jogo e 3D (importa vInit3D): num jogo 2D ele
-       seria 300 KB de z-buffer parado. */
+    /* The 3D renderer is only created when the game is 3D, i.e. it imports vInit3D; in
+       a 2D game it would be 300 KB of idle z-buffer. */
     Renderer3D* r3d = is3d ? new Renderer3D(vm, scr) : 0;
     sdk->r3d = r3d;
     vm->sdk = sdk;
-    printf("mem da VM: %d bytes  tela: %dx%d\n", vm->memLen, scr->w, scr->h);
+    printf("VM memory: %d bytes  screen: %dx%d\n", vm->memLen, scr->w, scr->h);
 
     vm->runConstructors();
     vm->run(maxInstr);
 
-    /* quantos pixels do framebuffer deixaram de ser pretos = o jogo DESENHOU */
+    /* how many framebuffer pixels stopped being black = the game DREW something */
     int nonBlack = 0;
     for (int i=0;i<scr->w*scr->h;i++) if ((scr->fb[i] & 0xffffff) != 0) nonBlack++;
 

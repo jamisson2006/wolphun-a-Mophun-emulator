@@ -1,11 +1,11 @@
-/* WolphunConfig.cpp - ver WolphunConfig.h */
+/* WolphunConfig.cpp - see WolphunConfig.h */
 #include "WolphunConfig.h"
 #include "WolphunLang.h"
 #include <bautils.h>
 #include <e32keys.h>      /* EStdKeyUpArrow, EStdKeySpace, ... */
 
-/* tabela de resolucoes (indice -> tamanho). Vai so ate EWolphunResAuto: esse ultimo
-   item da lista nao e um tamanho, e "deduzir do jogo". */
+/* The resolution table (index -> size). It stops at EWolphunResAuto, because that last
+   list item is not a size but "work it out from the game". */
 static const TInt KResW[EWolphunResAuto] = { 101, 128, 176, 176, 208, 240, 320 };
 static const TInt KResH[EWolphunResAuto] = {  80, 160, 208, 220, 320, 320, 240 };
 
@@ -13,26 +13,27 @@ TWolphunConfig::TWolphunConfig(){ SetDefaults(); }
 
 void TWolphunConfig::SetDefaults()
 {
-    /* Automatica: o proprio jogo diz para que aparelho foi feito (etiqueta [T300],
-       [T610], [176x208]... no nome). Escolher errado nao so corta a imagem: os jogos
-       que nao sao "multiscreen" abortam com "Terminal not supported!". */
+    /* Automatic: the game itself says which handset it was built for, through a
+       [T300], [T610] or [176x208] tag in its name. Choosing wrong does more than crop
+       the picture: games that are not "multiscreen" abort with
+       "Terminal not supported!". */
     iResolution = EWolphunResAuto;
     iScaling    = EWolphunScaleAspect;
     iKeyProfile = EWolphunKeysAuto;
     iSound      = 1;
     iTexFilter  = 0;
     iPowerSave  = 1;
-    /* Shift esquerdo: no QWERTY dos E-series e a tecla de baixo a esquerda, longe
-       das de jogo (WASD, espaco, enter) e nenhum jogo mophun a usa. Da para trocar
-       em Configuracoes > Tecla de tela cheia. */
+    /* Left shift: on the E-series QWERTY it is the bottom-left key, well away from the
+       game keys (WASD, space, enter), and no Mophun game uses it. It can be changed in
+       Settings > Fullscreen key. */
     iFullKey    = EStdKeyLeftShift;
-    iVibrate    = 1;        /* ligada, igual ao padrao do Android */
-    iLanguage   = 0;        /* ingles, igual ao desktop */        /* alta: ~40% de CPU, o meio-termo que ainda roda bem */
+    iVibrate    = 1;        /* on, matching the Android default */
+    iLanguage   = 0;        /* English, matching the desktop */
 
-    /* Mapa livre: comeca com o MESMO conjunto do perfil "Automatico", para que abrir
-       "Editar teclas" mostre algo util em vez de uma lista vazia, e para que trocar o
-       perfil para Personalizado nao deixe o jogo sem controle nenhum.
-       Coluna 0 = d-pad, coluna 1 = QWERTY, coluna 2 = teclado numerico. */
+    /* The free map starts with the SAME set as the "Automatic" profile, so that opening
+       "Edit keys" shows something useful instead of an empty list, and so that switching
+       the profile to Custom does not leave the game with no controls at all.
+       Column 0 = d-pad, column 1 = QWERTY, column 2 = the numeric keypad. */
     for (TInt a = 0; a < EWolphunActionCount; a++)
         for (TInt k = 0; k < KWolphunKeysPerAction; k++)
             iBind[a][k] = 0;
@@ -45,12 +46,12 @@ void TWolphunConfig::SetDefaults()
     iBind[EWolphunActFire2][0] = EStdKeyHash;       iBind[EWolphunActFire2][1] = 'E';
     iBind[EWolphunActSelect][0]= '0';               iBind[EWolphunActSelect][1]= 'Q';
 
-    /* Teclas literais: por padrao cada uma responde a ela mesma, que e o comportamento
-       antigo do MapKeypadAscii. Num QWERTY sem numerico o usuario remapeia para letras. */
+    /* Literal keys: by default each one answers to itself, which is MapKeypadAscii's
+       original behaviour. On a QWERTY with no keypad the user remaps them to letters. */
     for (TInt d = 0; d <= 9; d++) iBind[EWolphunActKey0 + d][0] = '0' + d;
     iBind[EWolphunActKeyHash][0] = EStdKeyHash;
     iBind[EWolphunActKeyStar][0] = EStdKeyNkpAsterisk;
-    iBind[EWolphunActPhoneBack][0]  = EStdKeyBackspace;   /* "voltar" natural no QWERTY */
+    iBind[EWolphunActPhoneBack][0]  = EStdKeyBackspace;   /* the natural "back" on a QWERTY */
     iBind[EWolphunActPhoneClear][0] = 'C';
 }
 
@@ -79,9 +80,10 @@ TInt TWolphunConfig::ActionBit(TInt aAction)
     }
 }
 
-/* Nomes das acoes, TRADUZIDOS. Eram _LIT em portugues: o menu ja estava em seis idiomas
-   mas esta lista -- Configuracoes > Editar teclas -- continuava fixa em portugues.
-   As "Num 0".."Num 9" ficam de fora de proposito: ja sao neutras em qualquer idioma. */
+/* Action names, TRANSLATED. They used to be Portuguese _LIT literals: the menu was
+   already in six languages while this list -- Settings > Edit keys -- stayed fixed in
+   Portuguese. "Num 0".."Num 9" are deliberately left out: they are already neutral in
+   any language. */
 TPtrC TWolphunConfig::ActionName(TInt aAction)
 {
     switch (aAction)
@@ -99,11 +101,12 @@ TPtrC TWolphunConfig::ActionName(TInt aAction)
         case EWolphunActPhoneClear: return WolphunLang::T(EStrActClear);
         default: break;
     }
-    /* teclas literais "Num 0".."Num 9". Eram montadas em tempo de execucao num TBuf<10>
-       estatico, mas dado estatico MUTAVEL nao pode existir numa DLL do EKA1 -- e o app do
-       alvo 8.1 e exatamente isso, um .app polimorfico; o petran recusaria o binario. Com
-       _LIT sao 10 literais CONSTANTES: vale nos dois alvos e some a inicializacao
-       preguicosa. Nao passam por WolphunLang porque nao ha o que traduzir num numero. */
+    /* The literal keys "Num 0".."Num 9". They used to be built at runtime into a static
+       TBuf<10>, but MUTABLE static data cannot exist in an EKA1 DLL -- and the 8.1
+       target's app is exactly that, a polymorphic .app; petran would reject the binary.
+       As _LIT they are 10 CONSTANT literals: valid on both targets, and the lazy
+       initialisation disappears. They do not go through WolphunLang because there is
+       nothing to translate in a number. */
     switch (aAction)
     {
         case EWolphunActKey0: { _LIT(k,"Num 0"); return TPtrC(k); }
@@ -124,13 +127,13 @@ TPtrC TWolphunConfig::ActionName(TInt aAction)
 
 TSize TWolphunConfig::ResolutionSize(TInt aIndex)
 {
-    /* EWolphunResAuto nao tem tamanho fixo: quem resolve e o motor, que conhece o nome
-       da ROM (ver CWolphunEngine::BuildGameL). Aqui so o valor de reserva. */
+    /* EWolphunResAuto has no fixed size: the engine resolves it, because it knows the
+       ROM's name (see CWolphunEngine::BuildGameL). This is only the fallback. */
     if (aIndex < 0 || aIndex >= EWolphunResAuto) aIndex = EWolphunRes176x208;
     return TSize(KResW[aIndex], KResH[aIndex]);
 }
 
-/* ---------------- armazenamento ---------------- */
+/* ---------------- storage ---------------- */
 CWolphunConfigStore* CWolphunConfigStore::NewL(RFs& aFs)
 {
     CWolphunConfigStore* self = new (ELeave) CWolphunConfigStore(aFs);
@@ -145,20 +148,20 @@ CWolphunConfigStore::~CWolphunConfigStore(){}
 
 void CWolphunConfigStore::ConstructL()
 {
-    /* diretorio privado do app (C:\private\<uid3>\) - nao precisa de capability */
+    /* the app's private directory (C:\private\<uid3>\) -- needs no capability */
     User::LeaveIfError(iFs.PrivatePath(iPrivatePath));
     TFileName full;
     full.Append(_L("C:"));
     full.Append(iPrivatePath);
     iPrivatePath = full;
-    iFs.MkDirAll(iPrivatePath);   /* ignora KErrAlreadyExists */
+    iFs.MkDirAll(iPrivatePath);   /* KErrAlreadyExists is ignored */
 }
 
 void CWolphunConfigStore::BuildPathL(const TDesC& aRomName, TDes& aOut, const TDesC& aExt)
 {
     aOut.Zero();
     aOut.Append(iPrivatePath);
-    /* usa so o nome base, sem extensao, e troca caracteres problematicos */
+    /* use only the base name, without the extension, replacing awkward characters */
     TInt dot = aRomName.LocateReverse('.');
     TPtrC base = (dot > 0) ? aRomName.Left(dot) : aRomName;
     const TInt maxBase = aOut.MaxLength() - aOut.Length() - aExt.Length() - 1;
@@ -173,9 +176,9 @@ void CWolphunConfigStore::BuildPathL(const TDesC& aRomName, TDes& aOut, const TD
     aOut.Append(aExt);
 }
 
-/* Config GLOBAL do emulador: o padrao herdado por jogos que ainda nao tem .cfg proprio.
-   Sem isto, cada jogo novo nascia com o mapa de teclas de fabrica e o usuario tinha de
-   refazer a configuracao jogo a jogo. */
+/* The emulator's GLOBAL config: the defaults inherited by games that have no .cfg of
+   their own yet. Without it, every new game started from the factory key map and the
+   user had to redo the setup game by game. */
 _LIT(KGlobalCfg, "global.cfg");
 
 void CWolphunConfigStore::LoadGlobalL(TWolphunConfig& aCfg)
@@ -202,17 +205,17 @@ void CWolphunConfigStore::SaveGlobalL(const TWolphunConfig& aCfg)
     CleanupStack::PopAndDestroy(&f);
 }
 
-/* Le um .cfg por cima de aCfg. Campos que o arquivo nao tiver (versao antiga, menor)
-   permanecem como estavam -- e por isso que acrescentar campos no FIM da struct nunca
-   invalida a configuracao ja salva. */
+/* Reads a .cfg over the top of aCfg. Fields the file does not carry -- an older,
+   shorter version -- stay as they were, which is precisely why appending fields at the
+   END of the struct never invalidates a configuration already saved. */
 void CWolphunConfigStore::ReadIntoL(RFile& aFile, TWolphunConfig& aCfg)
 {
     const TInt KMinSize = (TInt)(sizeof(TInt) * 5);   /* res, scaling, keyProfile, sound, texFilter */
-    TWolphunConfig loaded = aCfg;                      /* base: o que ja estava valendo */
+    TWolphunConfig loaded = aCfg;                      /* the baseline: whatever was in force */
     TPtr8 raw((TUint8*)&loaded, 0, sizeof(TWolphunConfig));
     if (aFile.Read(raw) != KErrNone) return;
     if (raw.Length() < KMinSize || raw.Length() > (TInt)sizeof(TWolphunConfig)) return;
-    /* valida: um arquivo corrompido nao pode derrubar o emulador */
+    /* validate: a corrupt file must not bring the emulator down */
     if (loaded.iResolution >= 0 && loaded.iResolution < EWolphunResCount
         && loaded.iScaling >= 0 && loaded.iScaling <= EWolphunScaleFill
         && loaded.iKeyProfile >= 0 && loaded.iKeyProfile < EWolphunKeyProfileCount

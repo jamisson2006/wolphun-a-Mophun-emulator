@@ -1,11 +1,11 @@
-/* midtest.cpp - teste de PC do sequenciador de SMF (MidiSeq), sem Symbian.
+/* midtest.cpp - a desktop test for the SMF sequencer (MidiSeq), with no Symbian.
  *
- *   g++ -fwrapv -O2 -Iinc -o test/midtest.exe test/midtest.cpp src/vm/MidiSeq.cpp
- *   test/midtest.exe arquivo1.mid arquivo2.mid ...
+ *   g++ -fwrapv -O2 -Iinc -o test/midtest test/midtest.cpp src/vm/MidiSeq.cpp
+ *   test/midtest file1.mid file2.mid ...
  *
- * Imprime, para cada arquivo, quantas mensagens sairam, a duracao, os canais usados e a
- * lista de eventos com o instante em milissegundos -- da para conferir a olho se o
- * andamento bate e se cada note on tem o seu note off.
+ * For each file it prints how many messages came out, the duration, the channels used
+ * and the list of events timestamped in milliseconds -- enough to check by eye that the
+ * tempo is right and that every note on has its note off.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -50,8 +50,9 @@ int main(int argc, char** argv)
         printf("    mensagens=%d  duracao=%u us (%.2f s)  canais=0x%04X\n",
                seq.Count(), seq.DurationUs(), seq.DurationUs()/1e6, seq.ChannelMask());
 
-        /* confere o balanco de notas: toda nota ligada tem de ser desligada, senao fica
-           presa tocando para sempre -- foi o sintoma do "tiro em loop". */
+        /* Check the note balance: every note turned on has to be turned off, otherwise
+           it stays stuck playing forever -- that was the symptom behind the "shot stuck
+           in a loop". */
         int ligadas[16][128];
         for (int c = 0; c < 16; c++) for (int k = 0; k < 128; k++) ligadas[c][k] = 0;
         int nOn = 0, nOff = 0;
@@ -65,8 +66,8 @@ int main(int argc, char** argv)
             if (!m)
             {
                 if (seq.Finished()) break;
-                agora += 1000;                  /* avanca 1 ms e tenta de novo */
-                if (agora > 120u*1000u*1000u) break;   /* trava de seguranca: 2 min */
+                agora += 1000;                  /* advance 1 ms and try again */
+                if (agora > 120u*1000u*1000u) break;   /* safety stop: 2 minutes */
                 continue;
             }
             const int ch = m->status & 0x0F;
