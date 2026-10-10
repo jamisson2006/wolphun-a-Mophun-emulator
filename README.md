@@ -21,6 +21,29 @@ Three front-ends, one core:
 - 📱 **Android** (7.0+) — touch UI with an on-screen keypad you can **move and resize per game**, and a multi-language interface.
 - 📟 **Symbian S60 3rd Edition** — a **native C++ port** that runs on the real Nokia hardware of the era (E63, E71, N95, N73, E61…). Ready-to-install `.sisx` packages included.
 
+## 📸 Screenshots
+
+<p align="center">
+  <img src="docs/screenshots/library.jpg" width="620" alt="The desktop ROM library, with search and a preview of the selected game">
+</p>
+
+<table>
+  <tr>
+    <td align="center" width="33%"><img src="docs/screenshots/rally-pro-contest.jpg" width="100%" alt="Rally Pro Contest"><br><sub><b>Rally Pro Contest</b> — software 3D</sub></td>
+    <td align="center" width="33%"><img src="docs/screenshots/da-vinci-code.jpg" width="100%" alt="The Da Vinci Code"><br><sub><b>The Da Vinci Code</b> — textured interiors</sub></td>
+    <td align="center" width="33%"><img src="docs/screenshots/da-vinci-code-2.jpg" width="100%" alt="The Da Vinci Code, character close-up"><br><sub><b>The Da Vinci Code</b> — character detail</sub></td>
+  </tr>
+</table>
+
+<table>
+  <tr>
+    <td align="center" width="50%"><img src="docs/screenshots/honey-cave-2.jpg" width="100%" alt="Honey Cave 2 gameplay"><br><sub><b>Honey Cave 2</b> — 2D tilemaps and sprites</sub></td>
+    <td align="center" width="50%"><img src="docs/screenshots/honey-cave-2-menu.jpg" width="100%" alt="Honey Cave 2 title screen"><br><sub><b>Honey Cave 2</b> — title screen</sub></td>
+  </tr>
+</table>
+
+> These are from the desktop build. The games run from their original, unmodified bytecode.
+
 ## 🆕 What's new in 0.3.0-beta
 
 ### 📟 New platform: Symbian S60 3rd Edition
