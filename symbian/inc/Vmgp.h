@@ -1,15 +1,15 @@
-/* Vmgp.h - loader/parser de um executavel VMGP (.mpn) mophun ja descriptografado.
- * Port de src/wolphun/vm/Vmgp.java. Expoe secoes (code/data), tabela de pool
- * (relocacao/imports), strings e recursos (sprites/tiles/mapas/...).
+/* Vmgp.h - loader/parser for a decrypted Mophun VMGP (.mpn) executable.
+ * Ported from src/wolphun/vm/Vmgp.java. Exposes the sections (code/data), the pool
+ * table (relocations/imports), strings and resources (sprites/tiles/maps/...).
  *
- * Layout do arquivo: header(40) | code | data | resource | pool | string
+ * File layout: header(40) | code | data | resource | pool | string
  *
- * ERRO: o construtor Java lancava excecao; aqui usamos a fabrica Vmgp::Create()
- * que devolve NULL e preenche *err (sem excecoes -> amigo do Symbian/GCCE).
+ * ERRORS: the Java constructor threw; here the Vmgp::Create() factory returns NULL and
+ * fills in *err instead -- no exceptions, which suits Symbian/GCCE.
  *
- * STUB nesta etapa: scanEmbeddedZip (VFS de ZIP embutido) e no-op. So jogos 3D
- * que embutem assets num ZIP (ex.: Da Vinci Code) precisam disso; jogos 2D e a
- * maioria dos 3D simples nao. Sera portado numa etapa dedicada (inflate).
+ * STUB at this stage: scanEmbeddedZip (the embedded-ZIP VFS) is a no-op. Only 3D games
+ * that bundle their assets in a ZIP (The Da Vinci Code, for instance) need it; 2D games
+ * and most simple 3D ones do not. It will be ported in a dedicated step (inflate).
  */
 #ifndef WOLPHUN_VMGP_H
 #define WOLPHUN_VMGP_H
@@ -23,30 +23,30 @@ public:
     struct PoolItem {
         int type;        /* 0=End 1=Local 2=Import 3=Global 4=SecRel 5=Sw16 6=Sw32 7=Const32 8=SymAdd */
         int itemTarget;  /* 1=code 2=data 4=bss */
-        int meta;        /* offset de string (imports/globals) ou meta */
-        int target;      /* offset alvo */
+        int meta;        /* string offset (imports/globals) or metadata */
+        int target;      /* target offset */
     };
 
     /* ---- header ---- */
-    u32 heapRaw;     /* campo cru @4 */
+    u32 heapRaw;     /* raw field @4 */
     u64 heapSize;    /* heapRaw << 2 (bytes) */
     int flags;
     i64 stackSize;   /* u16 @10 << 2 (bytes) */
     int codeSize, dataSize, bssSize, resSize, poolCount, stringSize;
 
-    /* ---- buffer e offsets de secao ---- */
-    u8* all;         /* arquivo inteiro (de propriedade deste objeto) */
+    /* ---- buffer and section offsets ---- */
+    u8* all;         /* the whole file, owned by this object */
     int allLen;
-    bool wasEncrypted;  /* a ROM tinha DRM e foi decifrada ao carregar */
+    bool wasEncrypted;  /* the ROM had DRM and was decrypted on load */
     int codeOff, dataOff, resOff, poolOff, strOff;
 
     /* ---- pool ---- */
-    PoolItem* pool;  /* poolCount itens */
+    PoolItem* pool;  /* poolCount entries */
 
-    /* heap pedido pelo jogo, alinhado a 16 (formula do nofun). */
+    /* the heap the game asked for, aligned to 16 (nofun's formula). */
     u64 heapBytesRequested() const { return (heapSize + 15u) & ~(u64)15u; }
 
-    /* fabrica: NULL em erro, com *err apontando p/ mensagem estatica. `d` e copiado. */
+    /* factory: NULL on error, with *err pointing at a static message. `d` is copied. */
     static Vmgp* Create(const u8* d, int len, const char** err);
     ~Vmgp();
 
@@ -54,28 +54,28 @@ public:
     int    resourceOffset(int i) const { return resStart[i]; }
     int    resourceLength(int i) const { return resLen[i]; }
 
-    /* string da secao de strings no offset dado (ponteiro p/ dentro de `all`, 0-terminada). */
+    /* a string from the string section at the given offset (points inside `all`, NUL-terminated). */
     const char* getString(int off) const;
 
-    /* true se o executavel IMPORTA o simbolo (pool type 2 = Import). */
+    /* true if the executable IMPORTS the symbol (pool type 2 = Import). */
     bool importsSymbol(const char* name) const;
 
-    /* ---- VFS embutido (STUB nesta etapa) ---- */
+    /* ---- embedded VFS (STUB at this stage) ---- */
     bool  hasArchive()  const { return archiveZip != 0; }
     const u8* archiveBytes() const { return archiveZip; }
     int   archiveLen()  const { return archiveZipLen; }
-    const u8* vfsGet(const char* name, int* outLen) const; /* NULL enquanto stub */
+    const u8* vfsGet(const char* name, int* outLen) const; /* NULL while stubbed */
 
 private:
     Vmgp();
     bool parse(const char** err);
-    void scanEmbeddedZip(); /* STUB: no-op por enquanto */
+    void scanEmbeddedZip(); /* STUB: no-op for now */
 
     int* resStart;
     int* resLen;
     int  resCount;
 
-    u8* archiveZip;      /* NULL = sem ZIP embutido */
+    u8* archiveZip;      /* NULL = no embedded ZIP */
     int archiveZipLen;
 };
 

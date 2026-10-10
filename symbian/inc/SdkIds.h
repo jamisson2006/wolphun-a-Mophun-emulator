@@ -1,6 +1,6 @@
-/* SdkIds.h - ids internos das APIs do SDK mophun.
- * Compartilhado entre Sdk.cpp (tabela nome->id) e SdkApi.cpp (switch do despacho).
- * Aliases do SDK (ex.: vNewPtr / vMalloc / vNewPtrDbg) compartilham o mesmo id.
+/* SdkIds.h - internal ids for the Mophun SDK APIs.
+ * Shared between Sdk.cpp (the name->id table) and SdkApi.cpp (the dispatch switch).
+ * SDK aliases (vNewPtr / vMalloc / vNewPtrDbg, for instance) share one id.
  */
 #ifndef WOLPHUN_SDKIDS_H
 #define WOLPHUN_SDKIDS_H
@@ -38,7 +38,7 @@ enum {
     A_copyRect, A_sprintf, A_sprintfVa, A_findRGBIndex,
     A_mul16, A_div16, A_sinF16, A_cosF16, A_limit,
     A_getSupportedRenderStates, A_setDisplayWindow,
-    /* ---- 3D: pipeline VMGP3D (modulo Renderer3D) ---- */
+    /* ---- 3D: the VMGP3D pipeline (Renderer3D module) ---- */
     A_init3D, A_setViewport, A_setRenderState, A_setZBuffer,
     A_setTexture, A_createTexture, A_setActiveTexture, A_setFunctionalTexture,
     A_deleteTexture, A_deleteAllTextures, A_freeTexture,

@@ -1,14 +1,14 @@
-/* WolphunWsd.h - o unico dado global MUTAVEL do emulador.
+/* WolphunWsd.h - the emulator's only MUTABLE global state.
  *
- * Por que isto existe: no Symbian 9.x (EKA2) o app e um .exe e pode ter variavel
- * estatica mutavel como qualquer programa. No Symbian 8.1 (EKA1) o app e uma DLL
- * polimorfica (.app), e DLL em EKA1 NAO pode ter dado estatico mutavel -- o petran
- * recusa o binario ("has initialised data"). A saida padrao do Symbian para isso e o
- * TLS: um ponteiro por DLL por thread. Um TInt cabe dentro do proprio ponteiro, entao
- * aqui nao ha alocacao nenhuma e nada para liberar.
+ * Why this exists: on Symbian 9.x (EKA2) the app is an .exe and may hold mutable
+ * static variables like any other program. On Symbian 8.1 (EKA1) the app is a
+ * polymorphic DLL (.app), and an EKA1 DLL may NOT hold mutable static data -- petran
+ * rejects the binary with "has initialised data". Symbian's standard way around that
+ * is thread-local storage: one pointer per DLL per thread. A TInt fits inside that
+ * pointer, so there is no allocation here and nothing to free.
  *
- * Mantenha esta classe como o UNICO lugar com estado global mutavel: se aparecer outro
- * estatico mutavel em qualquer .cpp, o alvo 8.1 para de linkar.
+ * Keep this class the ONLY place with mutable global state: one new mutable static in
+ * any .cpp and the 8.1 target stops linking.
  */
 #ifndef WOLPHUNWSD_H
 #define WOLPHUNWSD_H
@@ -18,7 +18,7 @@
 class WolphunWsd
 {
 public:
-    /* indice do idioma da interface (0 = ingles, o padrao) */
+    /* UI language index (0 = English, the default) */
     static TInt Lang();
     static void SetLang(TInt aIndex);
 };

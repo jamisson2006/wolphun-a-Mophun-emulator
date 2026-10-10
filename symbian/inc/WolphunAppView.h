@@ -1,9 +1,9 @@
-/* WolphunAppView.h - area de desenho do emulador.
+/* WolphunAppView.h - the emulator's drawing area.
  *
- * Quando NAO ha jogo aberto, desenha o FUNDO NATIVO DA NOKIA (o skin do tema que o
- * usuario escolheu no aparelho, via AknsDrawUtils) com uma mensagem - assim a tela do
- * emulador tem a mesma cara do resto do sistema. Com um jogo aberto, o quadro da VM e
- * blitado por cima, centralizado/ampliado conforme a configuracao.
+ * With NO game open it draws NOKIA'S NATIVE BACKGROUND (the skin of whichever theme the
+ * user picked on the phone, through AknsDrawUtils) plus a message, so the emulator's
+ * screen looks like the rest of the system. With a game open, the VM's frame is blitted
+ * on top, centred or scaled according to the settings.
  */
 #ifndef WOLPHUNAPPVIEW_H
 #define WOLPHUNAPPVIEW_H
@@ -11,7 +11,7 @@
 #include <coecntrl.h>
 
 class CWolphunEngine;
-class CAknsBasicBackgroundControlContext;   /* contexto do skin (tema) da Nokia */
+class CAknsBasicBackgroundControlContext;   /* Nokia skin (theme) context */
 
 class CWolphunAppView : public CCoeControl
 {
@@ -26,24 +26,24 @@ public:
     void Draw(const TRect& aRect) const;
 
 private:
-    /* desenha texto branco sobre tarja preta (legivel em qualquer tema/fundo) */
+    /* draws white text on a black band, readable over any theme or background */
     void DrawLabel(CWindowGc& aGc, const TDesC& aText,
                    const TPoint& aBaseline, const CFont* aFont) const;
 
 public:
     void SizeChanged();
-    /* fornece o contexto de skin aos controles filhos (fundo do tema da Nokia) */
+    /* hands the skin context to child controls (the Nokia theme background) */
     TTypeUid::Ptr MopSupplyObject(TTypeUid aId);
 
 private:
     CWolphunAppView();
     void ConstructL(const TRect& aRect);
-    /* onde o quadro cai na tela (aDst) e QUE PARTE dele e usada (aSrc, em
-       coordenadas do bitmap). Sao dois porque o modo "preencher" corta em vez
-       de deformar -- ver o comentario na implementacao. */
+    /* where the frame lands on screen (aDst) and WHICH PART of it is used (aSrc, in
+       bitmap coordinates). Two rectangles because the "fill" mode crops instead of
+       distorting -- see the comment in the implementation. */
     void GameRects(TRect& aDst, TRect& aSrc) const;
 
-    CWolphunEngine*      iEngine;        /* nao possui */
+    CWolphunEngine*      iEngine;        /* not owned */
     CAknsBasicBackgroundControlContext* iBgContext;
     HBufC*               iStatus;
 };
