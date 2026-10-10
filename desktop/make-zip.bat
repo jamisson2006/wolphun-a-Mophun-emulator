@@ -18,7 +18,7 @@ echo === Building staging folder ===
 if exist "build\zip" rmdir /s /q "build\zip"
 mkdir "build\zip\wolphun emulator"
 xcopy /e /i /q "%APPDIR%" "build\zip\wolphun emulator" >nul
-copy /y "dist-extras\LEIA-ME.txt" "build\zip\wolphun emulator\LEIA-ME.txt" >nul
+copy /y "dist-extras\README.txt" "build\zip\wolphun emulator\README.txt" >nul
 copy /y "dist-extras\Start wolphun emulator.bat" "build\zip\wolphun emulator\Start wolphun emulator.bat" >nul
 
 echo === Compressing ===

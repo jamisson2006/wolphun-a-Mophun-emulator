@@ -86,7 +86,7 @@ aged battery can brown out under a sustained 3D load, and the limiter caps how l
 runs inside each tick rather than just capping frames.
 
 > The Symbian sources build with the S60 3rd Edition SDK — see
-> [`symbian/LEIAME.txt`](symbian/LEIAME.txt). A Symbian 8.1 (EKA1) target for the N70 / N72 /
+> [`symbian/README.txt`](symbian/README.txt). A Symbian 8.1 (EKA1) target for the N70 / N72 /
 > N90 is present and complete in [`symbian/group2nd/`](symbian/group2nd), but is **not shipped
 > as a binary**: the ARM compiler bundled with that 2005 SDK is a cygwin build that
 > segfaults on modern Windows.
@@ -158,7 +158,7 @@ They are self-signed, so the phone may ask you to allow software from untrusted 
 Put your `.mpn` files anywhere and register the folder in *Options → Game folders*.
 
 To build it yourself you need the S60 3rd Edition SDK; the whole procedure, including the
-traps, is written up in [`symbian/LEIAME.txt`](symbian/LEIAME.txt):
+traps, is written up in [`symbian/README.txt`](symbian/README.txt):
 ```bat
 cd symbian\group
 build.cmd fp1          REM Symbian 9.2+     (build.cmd 3rd for 9.1)

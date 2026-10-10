@@ -55,7 +55,7 @@ copy /y "build\linux\wolphun.jar"            "%STG%\usr\lib\wolphun\wolphun.jar"
 copy /y "dist-extras\linux\wolphun"          "%STG%\usr\bin\wolphun"                     >nul
 copy /y "dist-extras\linux\wolphun.desktop"  "%STG%\usr\share\applications\wolphun.desktop" >nul
 copy /y "dist-extras\linux\copyright"        "%STG%\usr\share\doc\%PKG%\copyright"       >nul
-if exist "dist-extras\linux\LEIA-ME.txt" copy /y "dist-extras\linux\LEIA-ME.txt" "%STG%\usr\share\doc\%PKG%\LEIA-ME.txt" >nul
+if exist "dist-extras\linux\README.txt" copy /y "dist-extras\linux\README.txt" "%STG%\usr\share\doc\%PKG%\README.txt" >nul
 if exist assets\wolphun.png copy /y assets\wolphun.png "%STG%\usr\share\pixmaps\wolphun.png" >nul
 
 REM The control file is generated here so the VERSION lives in one place (this .bat).
