@@ -1,36 +1,37 @@
-/* Screen.h - framebuffer ARGB + paleta + clip + entrada + fonte do sistema.
- * Port de src/wolphun/Screen.java, SEM AWT/Swing.
+/* Screen.h - ARGB framebuffer + palette + clipping + input + the system font.
+ * Ported from src/wolphun/Screen.java, WITHOUT AWT/Swing.
  *
- * O modelo grafico do mophun (8bpp): sprites/tiles guardam INDICES; fills/textos
- * usam cores diretas (RGB555 com bit31) ou indices de paleta. Convertemos tudo p/
- * ARGB no framebuffer (igual ao nofun) -> transparencia e cores corretas.
+ * Mophun's graphics model is 8bpp: sprites and tiles store INDICES, while fills and text
+ * use either direct colours (RGB555 with bit 31 set) or palette indices. Everything is
+ * converted to ARGB in the framebuffer, as nofun does, which gets both transparency and
+ * colours right.
  *
- * Diferencas em relacao ao Java:
- *  - Removido o supersampling interno (rs): num celular nao ha ganho, so custo.
- *    O framebuffer e logico = fisico (w x h).
- *  - A fonte AWT virou uma fonte BITMAP embutida (inc/sysfont.h), gerada a partir
- *    da MESMA fonte do emulador de PC -> texto equivalente, sem dependencia de SO.
- *  - present() e showMessageBox() sao delegados ao HOST (a casca Symbian) via a
- *    interface ScreenHost; o nucleo continua portavel.
+ * Differences from the Java version:
+ *  - The internal supersampling (rs) is gone: on a phone it buys nothing and costs a
+ *    lot. The framebuffer is logical = physical (w x h).
+ *  - The AWT font became an embedded BITMAP font (inc/sysfont.h), generated from the
+ *    SAME font the PC emulator uses, so the text matches with no OS dependency.
+ *  - present() and showMessageBox() are delegated to the HOST (the Symbian shell)
+ *    through the ScreenHost interface, so the core stays portable.
  */
 #ifndef WOLPHUN_SCREEN_H
 #define WOLPHUN_SCREEN_H
 
 #include "vmcommon.h"
 
-/* Implementada pela casca (app Symbian) ou pelo harness de teste. */
+/* Implemented by the shell (the Symbian app) or by the test harness. */
 class ScreenHost {
 public:
     virtual ~ScreenHost(){}
-    /* chamado por vFlipScreen: o framebuffer esta pronto para ir a tela. */
+    /* called by vFlipScreen: the framebuffer is ready to go to the display. */
     virtual void Present() = 0;
-    /* milissegundos desde o inicio (base de tempo para vGetTickCount / pacing). */
+    /* milliseconds since start, the time base for vGetTickCount and frame pacing. */
     virtual u32 TickMs() = 0;
-    /* caixa de mensagem modal (vMsgBox). Devolve o botao (1 = OK). */
+    /* modal message box (vMsgBox). Returns the button pressed (1 = OK). */
     virtual int MessageBox(const char* title, const char* msg){ (void)title; (void)msg; return 1; }
-    /* segundos desde 1970 UTC (vGetTime). */
+    /* seconds since 1970 UTC (vGetTime). */
     virtual u32 EpochSeconds(){ return 0; }
-    /* data/hora local (vGetTimeDate): mes 1-12, dia do mes 1-31. */
+    /* local date and time (vGetTimeDate): month 1-12, day of month 1-31. */
     virtual void DateTime(int* year,int* month,int* day,int* hour,int* minute,int* second){
         if(year)*year=2008; if(month)*month=1; if(day)*day=1;
         if(hour)*hour=0; if(minute)*minute=0; if(second)*second=0;
@@ -39,23 +40,23 @@ public:
 
 class Screen {
 public:
-    /* mascara de botoes - BITS REAIS do mophun (nofun KeyCode.cs). */
+    /* button mask - Mophun's REAL BITS (from nofun's KeyCode.cs). */
     enum {
         UP=0x01, DOWN=0x02, LEFT=0x04, RIGHT=0x08,
         FIRE=0x10, SELECT=0x20, FIRE2=0x100
     };
 
     int w, h;
-    u32* fb;                 /* framebuffer ARGB (w*h) */
-    u32 palette[256];        /* paleta mutavel (RGB332 default + overrides do jogo) */
-    u32 rgb332[256];         /* RGB332 FIXO (cor direta de sprites/tiles formato 7) */
+    u32* fb;                 /* ARGB framebuffer (w*h) */
+    u32 palette[256];        /* mutable palette: RGB332 by default, overridden by the game */
+    u32 rgb332[256];         /* FIXED RGB332: the direct colour of format-7 sprites and tiles */
 
-    /* janela de recorte: [clipX0,clipX1) x [clipY0,clipY1) */
+    /* clipping window: [clipX0,clipX1) x [clipY0,clipY1) */
     int clipX0, clipY0, clipX1, clipY1;
 
-    int  targetFps;          /* vFlipScreen "bloqueia" ao refresh do aparelho */
-    u32  flips;              /* contador de frames (vFrameTickCount) */
-    i64  pixels2d;           /* diagnostico: pixels escritos pelo caminho 2D */
+    int  targetFps;          /* vFlipScreen "blocks" to the device's refresh */
+    u32  flips;              /* frame counter (vFrameTickCount) */
+    i64  pixels2d;           /* diagnostic: pixels written by the 2D path */
 
     Screen(int w, int h, ScreenHost* host);
     ~Screen();
@@ -85,18 +86,19 @@ public:
     }
     void fill(u32 argb){ for(int i=0,n=w*h;i<n;i++) fb[i]=argb; }
 
-    /* ---- apresentacao ---- */
+    /* ---- presentation ---- */
     void present();
 
-    /* ---- entrada ---- */
+    /* ---- input ---- */
     int  getButtons() const { return buttons; }
     void setButtonBit(int bit, bool down){ if(down) buttons|=bit; else buttons&=~bit; }
     void clearButtons(){ buttons=0; }
     void setKeypad(int ascii, bool down){ if(ascii>=0 && ascii<256) keypadDown[ascii]=(u8)(down?1:0); }
     bool keypadPressed(int ascii) const { return ascii>=0 && ascii<256 && keypadDown[ascii]!=0; }
 
-    /* ---- fonte do sistema (substituta p/ vTextOut / vTextOutU / vPrint) ---- */
-    /* vSelectFont(size, flags) do SDK; com fonte bitmap so a ESCALA inteira varia. */
+    /* ---- the system font, standing in for vTextOut / vTextOutU / vPrint ---- */
+    /* The SDK's vSelectFont(size, flags); with a bitmap font only the integer SCALE
+       can vary. */
     void selectFont(int size, int flags);
     int  textWidth(const char* s) const;
     int  fontHeight() const;
@@ -111,8 +113,8 @@ private:
     int  charWidth(unsigned char c) const;
 
     volatile int buttons;
-    u8  keypadDown[256];     /* 0..127 ASCII + 200..217 teclas do aparelho */
-    int fontScale;           /* escala inteira da fonte bitmap (1..4) */
+    u8  keypadDown[256];     /* 0..127 ASCII plus 200..217, the handset keys */
+    int fontScale;           /* integer scale of the bitmap font (1..4) */
     int lastFontSize, lastFontFlags;
     u32 lastFlipMs;
 };

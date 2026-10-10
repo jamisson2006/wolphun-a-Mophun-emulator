@@ -1,23 +1,23 @@
-/* MidiSeq.h - SEQUENCIADOR de Standard MIDI File. NAO sintetiza nada.
+/* MidiSeq.h - a Standard MIDI File SEQUENCER. It synthesises nothing.
  *
- * O QUE ELE FAZ: le um SMF e entrega as mensagens MIDI (note on/off, program change,
- * controle, pitch bend) ja com o INSTANTE em microssegundos em que cada uma deve sair.
- * So isso. Quem produz o SOM e o sintetizador e o banco General MIDI DO PROPRIO
- * APARELHO -- igual a um toque de celular ou a um jogo J2ME. Nao ha onda quadrada,
- * nao ha soundfont nosso, nao ha emulacao de MIDI.
+ * WHAT IT DOES: reads an SMF and hands out the MIDI messages (note on/off, program
+ * change, controller, pitch bend), each already tagged with the MOMENT, in
+ * microseconds, at which it should be sent. That is all. The SOUND is produced by THE
+ * PHONE'S OWN synthesizer and General MIDI bank -- exactly like a ringtone or a J2ME
+ * game. There is no square wave, no soundfont of ours, no MIDI emulation.
  *
- * E o mesmo desenho do emulador de PC, onde `Sequencer` conta o tempo e `Synthesizer`
- * (o do sistema) faz o som. No Symbian o papel do Synthesizer e do CMidiClientUtility
- * engatado (EClosedEngaged), que recebe NoteOnL/NoteOffL/SetInstrumentL ao vivo.
+ * Same design as the PC emulator, where `Sequencer` keeps time and the system's
+ * `Synthesizer` makes the sound. On Symbian the Synthesizer's role belongs to an
+ * engaged CMidiClientUtility (EClosedEngaged), fed NoteOnL/NoteOffL/SetInstrumentL live.
  *
- * POR QUE NAO ENTREGAR O ARQUIVO PRONTO AO APARELHO: no Symbian, carregar um recurso
- * MIDI e `OpenFile`, que sobe um processo controlador MMF inteiro por som -- demora
- * segundos, acumula memoria e, trocando de efeito no meio do jogo, derruba o processo.
- * O jogo mophun troca de efeito varias vezes por segundo. Contando o tempo aqui, o
- * motor do aparelho e aberto UMA vez na vida e nunca mais se mexe nele.
+ * WHY NOT HAND THE WHOLE FILE TO THE PHONE: on Symbian, loading a MIDI resource means
+ * `OpenFile`, which spins up an entire MMF controller process per sound -- it takes
+ * seconds, piles up memory, and swapping effects mid-game brings the process down. A
+ * Mophun game swaps effects several times per second. By keeping time here, the phone's
+ * engine is opened ONCE for the whole session and never touched again.
  *
- * Portavel: sem STL, sem libc, sem Symbian. Compila no g++ do PC (ha teste) e no GCCE.
- * Tudo em inteiros -- muitos S60 3rd nao tem unidade de ponto flutuante.
+ * Portable: no STL, no libc, no Symbian. Builds with a desktop g++ (there is a test) and
+ * with GCCE. All integer -- many S60 3rd devices have no floating-point unit.
  */
 #ifndef MIDISEQ_H
 #define MIDISEQ_H
@@ -27,53 +27,54 @@
 class MidiSeq
 {
 public:
-    /* Uma mensagem MIDI de canal, com o instante absoluto desde o inicio da sequencia.
-       `status` ja traz o canal nos 4 bits baixos. `size` e 2 ou 3 bytes no fio. */
+    /* One MIDI channel message, with its absolute time from the start of the sequence.
+       `status` already carries the channel in its low 4 bits. `size` is the 2 or 3 bytes
+       that go on the wire. */
     struct Msg
     {
-        u32 us;         /* quando tocar, em microssegundos desde o inicio */
-        u8  status;     /* 0x80..0xEF (nunca meta nem sysex: esses sao consumidos aqui) */
+        u32 us;         /* when to play it, in microseconds from the start */
+        u8  status;     /* 0x80..0xEF; never meta or sysex, those are consumed here */
         u8  d1, d2;
         u8  size;       /* 2 = status+d1, 3 = status+d1+d2 */
     };
 
-    /* Um SMF de musica pode ter muitos eventos; os efeitos do mophun tem dezenas. O teto
-       protege a memoria do aparelho: passando disso, a sequencia e cortada (e melhor
-       tocar o comeco do que recusar o som). */
+    /* A music SMF can hold a lot of events; Mophun's effects hold dozens. The ceiling
+       protects the phone's memory: beyond it the sequence is truncated, on the grounds
+       that playing the beginning beats refusing the sound outright. */
     enum { KMaxEvents = 2048, KMaxTempos = 64 };
 
     MidiSeq();
     ~MidiSeq();
 
-    /** Interpreta um SMF. false = nao e "MThd" valido, ou nao coube nada.
-        Substitui o que estiver carregado. */
+    /** Parses an SMF. false means it is not a valid "MThd", or that nothing fitted.
+        Replaces whatever was loaded. */
     bool Load(const u8* aSmf, int aLen);
 
-    /** Esquece a sequencia e libera a memoria. */
+    /** Forgets the sequence and frees its memory. */
     void Clear();
 
     bool Loaded() const { return iMsg != 0 && iCount > 0; }
     int  Count()  const { return iCount; }
 
-    /** Duracao total, em microssegundos (ultimo evento; minimo 1). Usada para repetir. */
+    /** Total duration in microseconds (the last event; minimum 1). Used for looping. */
     u32 DurationUs() const { return iDurationUs; }
 
-    /** Canais usados pela sequencia, 1 bit por canal. Serve para mandar "all notes off"
-        so onde e preciso, em vez de varrer os 16. */
+    /** Channels the sequence uses, one bit each. Lets "all notes off" go only where it
+        is needed, instead of sweeping all 16. */
     u16 ChannelMask() const { return iChannelMask; }
 
-    /** Proxima mensagem cujo instante ja chegou (us <= aNowUs), ou 0 se nao ha.
-        Avanca o cursor: chame em laco ate devolver 0. */
+    /** The next message whose time has arrived (us <= aNowUs), or 0 if there is none.
+        Advances the cursor, so call it in a loop until it returns 0. */
     const Msg* Next(u32 aNowUs);
 
-    /** Terminou de entregar tudo? */
+    /** Has everything been delivered? */
     bool Finished() const { return iNext >= iCount; }
 
-    /** Volta o cursor ao inicio (para repetir). Nao recarrega nada. */
+    /** Rewinds the cursor to the start, for looping. Reloads nothing. */
     void Rewind() { iNext = 0; }
 
 private:
-    /* evento ainda em TICKS, antes de virar microssegundos */
+    /* an event still in TICKS, before it becomes microseconds */
     struct Raw { u32 tick; u32 order; u8 status, d1, d2, size; };
 
     static void MergeSort(Raw* aArr, Raw* aTmp, int aN);

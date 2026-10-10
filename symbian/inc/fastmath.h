@@ -1,8 +1,8 @@
-/* fastmath.h - funcoes matematicas em float SEM depender de libm.
+/* fastmath.h - floating-point maths WITHOUT depending on libm.
  *
- * O GCCE do Symbian nao garante <math.h> (precisaria de OpenC/estlib), e o nucleo da
- * VM e portavel. Estas implementacoes bastam para o rasterizador 3D: precisao da ordem
- * de 1e-6, suficiente para transformacao de vertices e sombreado.
+ * Symbian's GCCE does not guarantee <math.h> (that would need OpenC/estlib), and the VM
+ * core has to stay portable. These implementations are good enough for the 3D
+ * rasterizer: accuracy around 1e-6, which covers vertex transformation and shading.
  */
 #ifndef WOLPHUN_FASTMATH_H
 #define WOLPHUN_FASTMATH_H
@@ -18,12 +18,12 @@ static inline float wpFloor(float x){
 }
 static inline float wpAbs(float x){ return x < 0.0f ? -x : x; }
 
-/* raiz quadrada: estimativa por bits + duas iteracoes de Newton-Raphson */
+/* square root: bit-level estimate followed by Newton-Raphson iterations */
 static inline float wpSqrt(float x){
     if (x <= 0.0f) return 0.0f;
     union { float f; u32 i; } u;
     u.f = x;
-    u.i = 0x5f3759dfu - (u.i >> 1);        /* 1/sqrt(x) aproximado */
+    u.i = 0x5f3759dfu - (u.i >> 1);        /* approximate 1/sqrt(x) */
     float r = u.f;
     r = r * (1.5f - 0.5f*x*r*r);
     r = r * (1.5f - 0.5f*x*r*r);
@@ -31,9 +31,9 @@ static inline float wpSqrt(float x){
     return x * r;
 }
 
-/* seno: reducao para [-pi,pi] + polinomio minimax de grau 7 */
+/* sine: range reduction to [-pi,pi] plus a degree-7 minimax polynomial */
 static inline float wpSin(float x){
-    /* reduz para [-pi, pi] */
+    /* reduce to [-pi, pi] */
     float k = x * (1.0f/WP_2PI);
     x -= WP_2PI * wpFloor(k + 0.5f);
     float x2 = x*x;
@@ -50,14 +50,14 @@ static inline float wpTan(float x){
     return wpSin(x) / c;
 }
 
-/* log2 e exp2 por manipulacao de expoente + polinomio na mantissa */
+/* log2 and exp2 by exponent manipulation plus a polynomial over the mantissa */
 static inline float wpLog2(float x){
     if (x <= 0.0f) return -1e30f;
     union { float f; u32 i; } u; u.f = x;
     int e = (int)((u.i >> 23) & 0xff) - 127;
-    u.i = (u.i & 0x007fffffu) | 0x3f800000u;      /* mantissa em [1,2) */
+    u.i = (u.i & 0x007fffffu) | 0x3f800000u;      /* mantissa in [1,2) */
     float m = u.f;
-    /* polinomio para log2(m), m em [1,2) */
+    /* polynomial for log2(m), with m in [1,2) */
     float p = -3.4436006e-2f;
     p = p*m +  3.1821337e-1f;
     p = p*m + -1.2315303f;
@@ -71,8 +71,8 @@ static inline float wpExp2(float x){
     if (x >  127.0f) return 3.4e38f;
     float fl = wpFloor(x);
     int   e  = (int)fl;
-    float f  = x - fl;                            /* parte fracionaria em [0,1) */
-    /* polinomio para 2^f */
+    float f  = x - fl;                            /* fractional part, in [0,1) */
+    /* polynomial for 2^f */
     float p = 1.3534167e-2f;
     p = p*f + 5.1700381e-2f;
     p = p*f + 2.4154861e-1f;

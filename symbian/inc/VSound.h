@@ -1,22 +1,23 @@
-/* VSound.h - modulo de som do mophun (vSoundInit/GetHandle/Ctrl/Dispose + vBeep).
+/* VSound.h - Mophun's sound module (vSoundInit/GetHandle/Ctrl/Dispose + vBeep).
  *
- * Portado de src/wolphun/vm/VSound.java. Mesmo desenho: um MIXER DE SOFTWARE proprio,
- * nao um "som por vez". Cada voz e reamostrada pela sua frequencia atual, o que permite
- * PITCH em tempo real (motor de carro), LOOP e varios sons ao mesmo tempo.
+ * Ported from src/wolphun/vm/VSound.java. Same design: a SOFTWARE MIXER of our own, not
+ * a "one sound at a time" scheme. Each voice is resampled at its current frequency,
+ * which is what allows real-time PITCH changes (a car engine), LOOPING, and several
+ * sounds at once.
  *
- * Diferencas obrigatorias do Java:
- *   - sem HashMap: vetores de tamanho fixo com busca por handle;
- *   - sem thread: quem puxa as amostras e a plataforma (no Symbian, o callback do
- *     CMdaAudioOutputStream chama RenderFrames);
- *   - sem double: a posicao de leitura e ponto fixo 16.16 em i64 (muitos aparelhos
- *     S60 3rd nao tem unidade de ponto flutuante; isto aqui roda a cada amostra).
+ * Differences from the Java version that were not optional:
+ *   - no HashMap: fixed-size arrays searched by handle;
+ *   - no thread: the platform pulls the samples (on Symbian, the
+ *     CMdaAudioOutputStream callback calls RenderFrames);
+ *   - no double: the read position is 16.16 fixed point in an i64. Many S60 3rd devices
+ *     have no floating-point unit, and this runs once per sample.
  *
- * Todos os formatos viram PCM16 mono na carga:
- *   - formato 2 = IMA ADPCM (nibble alto primeiro, variante mophun)
- *   - 8 bits    = PCM sem sinal (silencio = 128) -> ((v-128) << 8)
- *   - 16 bits   = PCM com sinal, little-endian
- * Layout NativeSoundHeader (SHDR, 36 B LE): formato@8, loopStart@12, loopEnd@16 (em
- * AMOSTRAS), freq@20, bits@24, canais@25, corpo@36 com tamanho em @32.
+ * Every format is decoded to mono PCM16 at load time:
+ *   - format 2 = IMA ADPCM (high nibble first, Mophun's variant)
+ *   - 8-bit    = unsigned PCM (silence = 128) -> ((v-128) << 8)
+ *   - 16-bit   = signed PCM, little-endian
+ * NativeSoundHeader layout (SHDR, 36 bytes LE): format@8, loopStart@12, loopEnd@16 (in
+ * SAMPLES), freq@20, bits@24, channels@25, body@36 with its size at @32.
  */
 #ifndef VSOUND_H
 #define VSOUND_H
@@ -28,7 +29,7 @@ class Pip2;
 class VSound
 {
 public:
-    enum { KOutRate = 22050 };      /* taxa do mixer (igual a do emulador de PC) */
+    enum { KOutRate = 22050 };      /* mixer rate, the same as the PC emulator's */
     enum { KMaxSounds = 48, KMaxVoices = 24 };
 
     VSound(Pip2* aVm);
@@ -36,50 +37,51 @@ public:
 
     bool enabled;
 
-    /* contadores de diagnostico: dizem se o jogo REALMENTE pediu som, e quanto.
-       Sem isso, "nao sai som" fica indistinguivel de "o jogo nao toca nada". */
-    long sndLoaded;    /* vSoundGetHandle bem sucedidos */
+    /* Diagnostic counters: they say whether the game REALLY asked for sound, and how
+       much. Without them, "no sound comes out" is indistinguishable from "the game
+       plays nothing". */
+    long sndLoaded;    /* successful vSoundGetHandle calls */
     long playCount;    /* vSoundCtrl(PLAY) */
     long beepCount;    /* vBeep */
 
-    /* ---- API chamada pelo Sdk ---- */
-    int  init();                                  /* 0 = ok, -1 = som desligado */
-    int  getHandle(int aDataPtr);                 /* decodifica p/ PCM16; <0 = erro */
+    /* ---- the API the Sdk calls ---- */
+    int  init();                                  /* 0 = ok, -1 = sound disabled */
+    int  getHandle(int aDataPtr);                 /* decodes to PCM16; <0 = error */
     int  ctrl(int aHandle, int aControl, int aParam);
     int  dispose();
     int  disposeHandle(int aHandle);
-    void beep(int aFreq, int aDurMs);             /* vBeep: onda quadrada pelo mixer */
+    void beep(int aFreq, int aDurMs);             /* vBeep: a square wave through the mixer */
 
-    /* ---- chamada pela plataforma (callback do stream de audio) ----
-       Escreve aFrames quadros ESTEREO intercalados (L,R) em PCM16. Sempre preenche o
-       buffer inteiro: silencio e zero. */
+    /* ---- called by the platform (the audio stream callback) ----
+       Writes aFrames interleaved STEREO frames (L,R) as PCM16. It always fills the whole
+       buffer: silence is zero. */
     void RenderFrames(i16* aDst, int aFrames);
 
-    /* ha alguma voz tocando? a casca usa isto p/ nao segurar o audio aberto a toa */
+    /* is any voice playing? the shell uses this to avoid holding the audio open for nothing */
     bool busy() const;
 
 private:
     struct Snd {
         i16* pcm;
-        int  len;          /* amostras */
+        int  len;          /* samples */
         int  freq;
         int  loopStart, loopEnd;
-        int  handle;       /* 0 = livre */
+        int  handle;       /* 0 = free */
     };
     struct Voice {
         Snd* snd;
-        i64  pos;          /* ponto fixo 16.16, em amostras */
-        i64  step;         /* ponto fixo 16.16: avanco por quadro de saida */
-        int  loop;         /* -1 = infinito, 0 = acabou, >0 = repeticoes restantes */
+        i64  pos;          /* 16.16 fixed point, in samples */
+        i64  step;         /* 16.16 fixed point: advance per output frame */
+        int  loop;         /* -1 = forever, 0 = finished, >0 = repeats left */
         int  vol;          /* 0..127 */
         int  pan;          /* -127..127 */
         bool playing;
-        int  handle;       /* 0 = livre */
+        int  handle;       /* 0 = free */
     };
 
     Snd*   findSound(int aHandle);
     Voice* findVoice(int aHandle);
-    Voice* takeVoice(int aHandle);     /* existente ou uma livre */
+    Voice* takeVoice(int aHandle);     /* the existing one, or a free slot */
     void   freeSound(Snd* aSnd);
     i16*   decodeImaAdpcm(int aBodyOff, int aBodySize, int* aOutLen);
 
@@ -90,11 +92,11 @@ private:
     int   masterVol;        /* 0..127 */
     bool  started;
 
-    /* vBeep: UM handle reservado. Jogos como o Mooktown Tennis chamam vBeep centenas de
-       vezes por segundo; criar uma voz por chamada estouraria o mixer. */
+    /* vBeep: ONE reserved handle. Games like Mooktown Tennis call vBeep hundreds of
+       times per second; allocating a voice per call would blow the mixer apart. */
     enum { KBeepHandle = 0x7000 };
     Snd   beepSnd;
-    int   beepFreq, beepDur;   /* o que esta no beepSnd agora (evita re-sintetizar) */
+    int   beepFreq, beepDur;   /* what beepSnd currently holds, to avoid re-synthesising */
 };
 
 #endif /* VSOUND_H */
