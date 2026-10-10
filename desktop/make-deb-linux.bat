@@ -33,6 +33,8 @@ set "RC=%errorlevel%"
 del sources-linux.txt
 if not "%RC%"=="0" goto :err
 if exist assets\wolphun.png copy /y assets\wolphun.png build\linux-classes\wolphun.png >nul
+REM o QR do Ko-fi e lido do classpath pelo Branding.kofiQr() (dialogo Sobre)
+if exist assets\kofi-qr.png copy /y assets\kofi-qr.png build\linux-classes\kofi-qr.png >nul
 
 echo === 2/5 Building the executable .jar ===
 if not exist build\linux mkdir build\linux
