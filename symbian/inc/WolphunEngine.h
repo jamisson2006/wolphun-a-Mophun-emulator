@@ -1,12 +1,13 @@
-/* WolphunEngine.h - liga o nucleo portavel da VM ao Symbian.
+/* WolphunEngine.h - the bridge between the portable VM core and Symbian.
  *
- * Possui Vmgp + Pip2 + Screen + Sdk (+ Renderer3D se o jogo for 3D) e implementa as
- * tres interfaces que o nucleo pede: ScreenHost (tempo/apresentacao/dialogos),
- * SdkFileSystem (saves e arquivos de dados, via RFs). O som fica em CWolphunAudio.
+ * It owns Vmgp + Pip2 + Screen + Sdk (plus Renderer3D when the game is 3D) and
+ * implements the interfaces the core asks for: ScreenHost (time, presentation,
+ * dialogs) and SdkFileSystem (saves and data files, through RFs). Sound lives in
+ * CWolphunAudio.
  *
- * A VM roda em FATIAS a partir de um CPeriodic: cada disparo executa instrucoes ate o
- * jogo chamar vFlipScreen (um quadro pronto) ou ate gastar o orcamento. Assim a
- * interface do Symbian continua respondendo - um laco fechado travaria o aparelho.
+ * The VM runs in SLICES driven by a CPeriodic: each tick executes instructions until
+ * the game calls vFlipScreen (a frame is ready) or until the budget runs out. That is
+ * what keeps the Symbian interface responsive -- a tight loop would lock the phone up.
  */
 #ifndef WOLPHUNENGINE_H
 #define WOLPHUNENGINE_H
@@ -26,7 +27,7 @@ class Renderer3D;
 class CWolphunAudio;
 class CWolphunVibra;
 
-/* a casca avisa a View quando ha um quadro novo */
+/* the shell tells the View when a new frame is ready */
 class MWolphunObserver
 {
 public:
@@ -42,35 +43,36 @@ public:
     static CWolphunEngine* NewL(RFs& aFs, MWolphunObserver& aObserver);
     ~CWolphunEngine();
 
-    /* ---- ciclo de vida do jogo ---- */
+    /* ---- the game's life cycle ---- */
     void LoadRomL(const TDesC& aFullPath);
     void CloseRom();
-    void RestartL();                      /* recarrega a ROM atual (ex.: trocou a resolucao) */
+    void RestartL();                      /* reloads the current ROM, e.g. after a resolution change */
     TBool HasGame() const { return iVm != 0; }
     const TDesC& RomName() const { return iRomName; }
 
-    /* ---- configuracao ---- */
+    /* ---- configuration ---- */
     TWolphunConfig& Config() { return iConfig; }
-    /* diretorio privado do app (onde ficam saves, config por jogo e a lista de pastas) */
+    /* the app's private directory: saves, per-game config and the folder list */
     const TDesC& PrivatePath() const { return iStore->PrivatePath(); }
     void SaveConfigL();
-    void ApplyLiveSettings();             /* som / filtro: valem sem reiniciar */
+    void ApplyLiveSettings();             /* sound and filter take effect without a restart */
 
-    /* ---- execucao ---- */
+    /* ---- execution ---- */
     void StartRunning();
     void StopRunning();
     TBool IsRunning() const { return iTimer && iTimer->IsActive(); }
 
-    /* ---- saida ---- */
+    /* ---- output ---- */
     CFbsBitmap* Bitmap() const { return iBitmap; }
     TSize GameSize() const;
-    /* Diagnostico mostrado na tela enquanto o jogo ainda nao produziu nenhum quadro:
-       diz se a VM esta avancando, quantas instrucoes ja rodou e se parou. Sem isso, um
-       jogo que nao desenha fica indistinguivel de um emulador quebrado. */
+    /* Diagnostics shown on screen while the game has not produced a frame yet: whether
+       the VM is making progress, how many instructions it has run, and whether it has
+       stopped. Without this, a game that draws nothing is indistinguishable from a
+       broken emulator. */
     void DiagnosticsL(TDes& aOut) const;
     TInt FrameCount() const { return iFrames; }
 
-    /* ---- entrada ---- */
+    /* ---- input ---- */
     void SetButton(TInt aBit, TBool aDown);
     void SetKeypad(TInt aAscii, TBool aDown);
 
@@ -86,9 +88,9 @@ public:
     void WriteSave(const char* aName, const u8* aData, int aLen);
     u8*  ReadCompanion(const char* aName, int* aOutLen);
 
-    /* ---- som ----
-       O escoamento de audio vive em CWolphunAudio (CMdaAudioOutputStream para o PCM do
-       VSound + CMdaAudioPlayerUtility para os recursos MIDI do vPlayResource). */
+    /* ---- sound ----
+       The audio output lives in CWolphunAudio: CMdaAudioOutputStream for VSound's PCM,
+       plus CMdaAudioPlayerUtility for the MIDI resources of vPlayResource. */
     void AudioDiagnostics(TDes& aOut) const;
 
 private:
@@ -98,7 +100,7 @@ private:
     void BuildGameL(const TDesC& aFullPath);
     void AllocBitmapL(const TSize& aSize);
     void CopyFrameToBitmap();
-    /* converte um nome de arquivo logico do jogo (char*) p/ um caminho no dir privado */
+    /* turns one of the game's logical file names (char*) into a path in the private dir */
     void SavePathL(const char* aName, TDes& aOut);
 
     static TInt TimerTick(TAny* aSelf);
@@ -109,24 +111,24 @@ private:
     CPeriodic*         iTimer;
     CWolphunConfigStore* iStore;
 
-    /* nucleo portavel */
+    /* the portable core */
     Vmgp*       iExe;
     Pip2*       iVm;
     Screen*     iScreen;
     Sdk*        iSdk;
     Renderer3D* iR3d;
-    CWolphunAudio* iAudio;      /* saida de som (vive enquanto o motor viver) */
-    /* Vibracao. So existe quando ligada nas opcoes E o aparelho tem motor; 0 e o
-       estado normal nos dois casos contrarios. Criada/destruida pelo
-       ApplyLiveSettings, entao a opcao vale na hora, sem reiniciar o jogo. */
+    CWolphunAudio* iAudio;      /* sound output; lives as long as the engine does */
+    /* Vibration. It exists only when the setting is on AND the phone has a motor; 0 is
+       the normal state in either other case. ApplyLiveSettings creates and destroys it,
+       so the setting takes effect immediately, without restarting the game. */
     CWolphunVibra* iVibra;
 
     CFbsBitmap* iBitmap;
     TBool       iFlipPending;
-    TInt        iFrames;      /* quadros produzidos pelo jogo (diagnostico) */
-    TUint       iLastFrameTick;  /* NTickCount do ultimo quadro, p/ o limite de quadros */
-    TInt        iFramePeriodMs;  /* 0 = sem limite; derivado de iConfig.iPowerSave */
-    TInt        iSliceBudgetMs;  /* ms de VM por tique de 20 ms = ciclo de trabalho da CPU */
+    TInt        iFrames;      /* frames the game has produced (diagnostic) */
+    TUint       iLastFrameTick;  /* NTickCount of the last frame, for the frame cap */
+    TInt        iFramePeriodMs;  /* 0 = no cap; derived from iConfig.iPowerSave */
+    TInt        iSliceBudgetMs;  /* ms of VM per 20 ms tick = the CPU duty cycle */
 
     TWolphunConfig iConfig;
     TFileName      iRomPath;

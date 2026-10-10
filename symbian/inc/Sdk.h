@@ -1,16 +1,17 @@
-/* Sdk.h - camada de APIs do SDK mophun (vGfx*, vSprite*, vMap*, ...).
- * Port de src/wolphun/vm/Sdk.java. Cada CALLl p/ um import cai aqui via
- * invoke(); args em p0..p3/pilha, retorno em r0.
+/* Sdk.h - the Mophun SDK API layer (vGfx*, vSprite*, vMap*, ...).
+ * Ported from src/wolphun/vm/Sdk.java. Every CALLl to an import lands here through
+ * invoke(); arguments arrive in p0..p3 then on the stack, the result goes in r0.
  *
- * Diferencas em relacao ao Java:
- *  - Despacho por NOME (switch de String) virou resolve(nome)->id + switch(id).
- *    O Pip2 resolve o id UMA VEZ por entrada de pool e depois chama invokeId():
- *    sem strcmp no caminho quente (importa num ARM de 369 MHz).
- *  - HashMap/ArrayList -> estruturas proprias (IntMap aberto, arrays dinamicos).
- *  - Removido todo o codigo de diagnostico por variavel de ambiente.
- *  - Arquivos (save game / dados companheiros) passam pela interface SdkFileSystem,
- *    implementada pela casca (RFile no Symbian, stdio no teste de desktop).
- *  - Audio passa pela interface SdkAudio (CMdaAudioOutputStream no Symbian).
+ * Differences from the Java version:
+ *  - Dispatch BY NAME (a switch over Strings) became resolve(name)->id plus
+ *    switch(id). Pip2 resolves the id ONCE per pool entry and then calls invokeId(),
+ *    so there is no strcmp on the hot path -- it matters on a 369 MHz ARM.
+ *  - HashMap/ArrayList -> structures of our own (an open-addressed IntMap, dynamic
+ *    arrays).
+ *  - All the environment-variable diagnostic code is gone.
+ *  - Files (save games and companion data) go through the SdkFileSystem interface,
+ *    implemented by the shell: RFile on Symbian, stdio in the desktop test.
+ *  - Audio goes through the SdkAudio interface (CMdaAudioOutputStream on Symbian).
  */
 #ifndef WOLPHUN_SDK_H
 #define WOLPHUN_SDK_H
@@ -21,57 +22,58 @@ class Pip2;
 class Screen;
 class Renderer3D;
 
-/* ---------- abstracao de arquivos (save game e dados companheiros) ---------- */
+/* ---------- the file abstraction: save games and companion data ---------- */
 class SdkFileSystem {
 public:
     virtual ~SdkFileSystem(){}
-    /* le um save pelo nome logico ("resume", "highscore"). Devolve buffer novo
-       (delete[] pelo chamador) e tamanho, ou NULL se nao existir. */
+    /* Reads a save by its logical name ("resume", "highscore"). Returns a fresh
+       buffer, which the caller must delete[], plus its length; NULL if there is none. */
     virtual u8*  ReadSave(const char* name, int* outLen) = 0;
-    /* grava o save inteiro. */
+    /* writes the whole save. */
     virtual void WriteSave(const char* name, const u8* data, int len) = 0;
-    /* arquivo de dados COMPANHEIRO ao lado da ROM (somente leitura), ex.: "dvc.mpc". */
+    /* a COMPANION data file sitting next to the ROM, read-only, e.g. "dvc.mpc". */
     virtual u8*  ReadCompanion(const char* name, int* outLen){ (void)name; if(outLen)*outLen=0; return 0; }
 };
 
-/* ---------- abstracao de audio ---------- */
-/* Saida de audio da plataforma. O Sdk NAO manda som pronto por aqui: quem mistura e o
-   VSound (portavel). A plataforma so abre um canal PCM 16 bits estereo a VSound::KOutRate
-   e, no seu proprio callback, chama VSound::RenderFrames para encher o buffer.
-   Assim o mixer e identico no PC e no aparelho; so o escoamento muda. */
+/* ---------- the audio abstraction ---------- */
+/* The platform's audio output. The Sdk does NOT push finished sound through here: the
+   mixing is done by the portable VSound. The platform only opens a 16-bit stereo PCM
+   channel at VSound::KOutRate and, from its own callback, calls VSound::RenderFrames to
+   fill the buffer. That way the mixer is identical on PC and on the phone; only the
+   draining differs. */
 #include "VSound.h"
 
 class SdkAudio {
 public:
     virtual ~SdkAudio(){}
 
-    /* --- canal PCM, alimentado pelo VSound (vBeep e o modulo de som) --- */
-    virtual void Start(){}      /* abre/garante o canal (idempotente) */
-    virtual void Stop(){}       /* fecha o canal */
+    /* --- the PCM channel, fed by VSound (vBeep and the sound module) --- */
+    virtual void Start(){}      /* opens the channel, or confirms it is open; idempotent */
+    virtual void Stop(){}       /* closes the channel */
 
-    /* --- musica: vPlayResource entrega um recurso pronto (tipicamente SMF/MIDI).
-       E por aqui que passa o som da MAIORIA dos jogos: no acervo testado, 233 de 313
-       importam vPlayResource e NENHUM importa o modulo VSound. No Symbian isto vai
-       direto para o sintetizador do aparelho. --- */
+    /* --- music: vPlayResource hands over a ready-made resource, typically SMF/MIDI.
+       This is the path MOST games' sound takes: across the archive tested, 233 of 313
+       import vPlayResource and NONE import the VSound module. On Symbian this goes
+       straight to the phone's synthesizer. --- */
     virtual int  PlayMusic(const u8* data, int len, bool loop)
                  { (void)data; (void)len; (void)loop; return 1; }
     virtual void StopMusic(){}
 };
 
-/* Saida de VIBRACAO do aparelho, no mesmo molde do SdkFileSystem e do SdkAudio: o
-   nucleo da VM nao conhece Symbian nem Android: quem implementa e a casca de cada
-   plataforma. 0 = sem motor, ou desligado nas opcoes -- e o estado normal, nao um erro.
-   Mesmo contrato da versao Android (Sdk.Vibrador: vibra/para). */
+/* The device's VIBRATION output, in the same shape as SdkFileSystem and SdkAudio: the
+   VM core knows nothing about Symbian or Android, and each platform's shell implements
+   it. 0 means no motor, or switched off in the settings -- that is the normal state,
+   not an error. Same contract as the Android version's Sdk.Vibrador interface. */
 class SdkVibra {
 public:
     virtual ~SdkVibra(){}
-    /* liga o motor por aDurationMs; chamar de novo durante um pulso e permitido */
+    /* runs the motor for aDurationMs; calling again during a pulse is allowed */
     virtual void Vibrate(int aDurationMs) = 0;
-    /* interrompe o pulso em andamento */
+    /* interrupts the pulse in progress */
     virtual void StopVibra() = 0;
 };
 
-/* ---------- mapa int->int (enderecamento aberto, sem STL) ---------- */
+/* ---------- an int->int map (open addressing, no STL) ---------- */
 class IntMap {
 public:
     IntMap();
@@ -81,13 +83,13 @@ public:
     bool get(int key, int* val) const;
     bool remove(int key, int* oldVal);
     int  size() const { return count; }
-    /* iteracao: devolve false quando acabar. *it comeca em 0. */
+    /* iteration: returns false when there is nothing left. *it starts at 0. */
     bool next(int* it, int* key, int* val) const;
 private:
     void grow();
     int*  keys;
     int*  vals;
-    u8*   state;      /* 0=vazio 1=ocupado 2=removido */
+    u8*   state;      /* 0 = empty, 1 = occupied, 2 = erased */
     int   cap, count;
 };
 
@@ -96,41 +98,41 @@ public:
     Sdk(Pip2* vm, Screen* scr);
     ~Sdk();
 
-    /* resolve o nome de um import p/ um id interno (-1 = desconhecido). */
+    /* resolves an import's name to an internal id (-1 = unknown). */
     static int  resolve(const char* name);
-    /* despacha pelo id resolvido (caminho quente). */
+    /* dispatches by the resolved id -- the hot path. */
     void invokeId(int id);
-    /* conveniencia: resolve + despacha (usado quando nao ha cache). */
+    /* convenience: resolve then dispatch, used when there is no cache. */
     void invoke(const char* name){ invokeId(resolve(name)); }
 
-    /* libera um bloco do heap da VM (usado pelo escalonador ao matar uma tarefa). */
+    /* frees a block of the VM's heap; used by the scheduler when killing a task. */
     void freePtr(int ptr);
 
-    /* ---------- configuracao vinda da casca ---------- */
+    /* ---------- configuration coming from the shell ---------- */
     SdkFileSystem* fs;
     SdkAudio*      audio;
-    SdkVibra*      vibra;           /* 0 = sem vibracao (sem motor ou desligada) */
-    VSound         vsound;      /* modulo de som: mixer proprio, igual ao do PC */
-    Renderer3D*    r3d;             /* modulo 3D (proxima etapa); 0 = jogo 2D */
+    SdkVibra*      vibra;           /* 0 = no vibration: no motor, or switched off */
+    VSound         vsound;      /* the sound module: our own mixer, as on the PC */
+    Renderer3D*    r3d;             /* the 3D module; 0 means a 2D game */
     bool soundEnabled;
-    int  deviceModel, deviceVendor; /* vGetCaps System: deviceId=(model<<16)|vendor */
-    int  videoFormat;               /* 7 = RGB332 (256 cores diretas) */
+    int  deviceModel, deviceVendor; /* vGetCaps System: deviceId = (model<<16)|vendor */
+    int  videoFormat;               /* 7 = RGB332, 256 direct colours */
     int  apiMinor;                  /* vGetVMGPInfo = (2<<16)|apiMinor */
-    bool version150;                /* jogo importa vInit3D => SDK >= 1.50 */
+    bool version150;                /* the game imports vInit3D => SDK >= 1.50 */
 
-    i64  stubCalls;                 /* chamadas nao implementadas (diagnostico) */
+    i64  stubCalls;                 /* unimplemented calls, for diagnostics */
 
-    /* flush de todos os saves gravaveis ainda abertos (chamado ao sair). */
+    /* flushes every writable save still open; called on the way out. */
     void flushSaves();
 
 private:
     Pip2*   vm;
     Screen* scr;
 
-    /* ---------- heap da VM: bump + free list ---------- */
+    /* ---------- the VM heap: bump allocation plus a free list ---------- */
     int  nextHeap;
     int  taskStackSize;
-    IntMap liveBlocks;              /* ptr -> tamanho */
+    IntMap liveBlocks;              /* ptr -> size */
     struct FreeBlock { int ptr, size; };
     FreeBlock* freeList;
     int freeCount, freeCap;
@@ -138,11 +140,11 @@ private:
     int  alloc(int size, bool clear);
     void zero(int ptr,int n);
 
-    /* ---------- estado grafico ---------- */
+    /* ---------- graphics state ---------- */
     int foreColor, backColor, transferMode;
     bool spriteSlotDraw;
 
-    /* fonte bitmap do jogo (VMGPFONT) */
+    /* the game's own bitmap font (VMGPFONT) */
     int aFontPtr, aFontData, aFontChartbl, aFontBpp, aFontW, aFontH, aFontPal;
     void fontRefresh();
     int  setActiveFont(int ptr);
@@ -160,7 +162,7 @@ private:
     int   spriteBoxCollision(int boxPtr,int from,int to);
     int   spriteCollision(int check,int from,int to);
 
-    /* ---------- tilemap (copia do MAP_HEADER) ---------- */
+    /* ---------- the tilemap, a copy of MAP_HEADER ---------- */
     int  mapHeaderPtr;
     int  mhFlag, mhFmt, mhW, mhH, mhAnim, mhXPan, mhYPan, mhXPos, mhYPos, mhMapData, mhTileData;
     bool mhValid;
@@ -173,7 +175,7 @@ private:
     void mapSetTile(int x,int y,int tile);
     void mapSetAttr(int x,int y,int attr);
 
-    /* ---------- desenho ---------- */
+    /* ---------- drawing ---------- */
     u32  getColor(int c) const;
     void px(int x,int y,u32 argb);
     void fillRect(int x0,int y0,int x1,int y1);
@@ -186,13 +188,13 @@ private:
     int  findRGBIndex(int rgb555);
     int  argbToRgb332(u32 argb) const;
 
-    /* ---------- entrada ---------- */
+    /* ---------- input ---------- */
     int  testKey(int key);
     int  scanKeys();
 
-    /* ---------- texto / strings ---------- */
+    /* ---------- text and strings ---------- */
     int  textExtent(const char* s);
-    /* le uma string da memoria da VM p/ um buffer (latin1 ou UTF-16LE). */
+    /* reads a string out of the VM's memory into a buffer (latin1 or UTF-16LE). */
     const char* readStr(int ptr, bool unicode, char* buf, int bufLen);
     int  itoa(int val,int buf,bool sign,int len,int pad);
     int  vatoi(int strPtr,int endPtr);
@@ -206,13 +208,13 @@ private:
     int  sprintfReg(int buf,int fmt);
     int  sprintfVa(int buf,int fmt,int ap);
 
-    /* ---------- streams (recursos do .mpn + arquivos) ---------- */
+    /* ---------- streams: resources inside the .mpn, plus files ---------- */
     enum { MAX_STREAMS = 32 };
     struct Stream {
         bool used;
         u8*  data;
         int  len, cap, pos;
-        bool ownsData;      /* true = delete[] no close */
+        bool ownsData;      /* true = delete[] it on close */
         bool writable;
         char name[64];
     };
@@ -227,7 +229,7 @@ private:
     void streamClose(int handle);
     int  playResource(int data,int length,int flags);
 
-    /* ---------- descompressao LZ ---------- */
+    /* ---------- LZ decompression ---------- */
     int  decompress(int source,int dest);
     int  decompressStream(int handle,int dest);
     int  decompHdr(int infoPtr,int source);

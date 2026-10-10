@@ -1,20 +1,21 @@
-/* Renderer3D.h - rasterizador de software do subsistema 3D do mophun (VMGP3D).
- * Port de src/wolphun/vm/Renderer3D.java.
+/* Renderer3D.h - the software rasterizer for Mophun's 3D subsystem (VMGP3D).
+ * Ported from src/wolphun/vm/Renderer3D.java.
  *
- * Pilha de matrizes (Fixed 14-bit, column-major default), transformacao de vertices,
- * recorte no near-plane e preenchimento de triangulos com z-buffer, gouraud e textura
- * perspective-correct.  clip = projection * current * v.
+ * Matrix stack (14-bit fixed point, column-major by default), vertex transformation,
+ * near-plane clipping, and triangle filling with a z-buffer, Gouraud shading and
+ * perspective-correct texturing.  clip = projection * current * v.
  *
- * Formatos: posicao/matriz = Fixed/16384; UV = /1024; angulo = (d&0xFFF)/4096 volta.
+ * Formats: positions and matrices are Fixed/16384; UVs are /1024; an angle is
+ * (d & 0xFFF)/4096 of a turn.
  *
- * Diferencas em relacao ao Java:
- *  - SEM libm: sqrt/sin/cos/tan/pow/exp/floor sao implementados aqui (fastmath), porque
- *    o GCCE do Symbian nao garante math.h sem OpenC.
- *  - Removido todo o codigo de diagnostico por variavel de ambiente e o save-state.
- *  - Sem supersampling (rs=1): o z-buffer tem o tamanho da tela.
- *  - Buffers de vertice sao REUTILIZADOS (crescem sob demanda) em vez de alocados por
- *    chamada - alocar ~100 KB por primitiva mataria um aparelho.
- *  - HashMap de texturas gerenciadas -> array crescente indexado pelo handle.
+ * Differences from the Java version:
+ *  - NO libm: sqrt/sin/cos/tan/pow/exp/floor are implemented here (fastmath), because
+ *    Symbian's GCCE does not guarantee math.h without OpenC.
+ *  - All the environment-variable diagnostics and the save-state code are gone.
+ *  - No supersampling (rs=1): the z-buffer is screen-sized.
+ *  - Vertex buffers are REUSED, growing on demand, instead of being allocated per call
+ *    -- allocating ~100 KB per primitive would kill a phone.
+ *  - The HashMap of managed textures became a growing array indexed by handle.
  */
 #ifndef WOLPHUN_RENDERER3D_H
 #define WOLPHUN_RENDERER3D_H
@@ -29,13 +30,13 @@ public:
     Renderer3D(Pip2* vm, Screen* scr);
     ~Renderer3D();
 
-    /* ---------- ponto fixo / matematica do SDK ---------- */
+    /* ---------- fixed point and the SDK's maths ---------- */
     static float f2f(int fx){ return fx / 16384.0f; }
     static int   ff(float v){ return (int)(v * 16384.0f); }
     static float uv2f(i16 u){ return u / 1024.0f; }
-    /* SDK: "Degree, range 0 - 4095" => a volta COMPLETA sao 4096 unidades, logo o divisor
-       e 4096 e NAO 4095 (com 4095 cada angulo saia 0,024% maior e o erro se acumulava na
-       tesselacao de domo/ceu e na camera). */
+    /* The SDK says "Degree, range 0 - 4095", so a FULL turn is 4096 units and the
+       divisor is 4096, NOT 4095. With 4095 every angle came out 0.024% too large and the
+       error accumulated in sky-dome tessellation and in the camera. */
     static float ang2rad(int d){ return (d & 0xFFF) / 4096.0f * 6.28318530718f; }
     static float ang2deg(int d){ return (d & 0xFFF) / 4096.0f * 360.0f; }
 
@@ -47,7 +48,7 @@ public:
     int vCos(int v);
     int vTan(int v);
 
-    /* ---------- vetores (NativeVector3D 12B) ---------- */
+    /* ---------- vectors (NativeVector3D, 12 bytes) ---------- */
     void vectorAdd(int d,int a,int b);
     void vectorSub(int d,int a,int b);
     void vectorMul(int d,int a,int b);
@@ -61,7 +62,7 @@ public:
     void vectorArrayAdd(int d,int s1,int s2,int count);
     void vectorArrayDelta(int d,int s1,int s2,int param);
 
-    /* ---------- frustum / planos / colisao ---------- */
+    /* ---------- frustum, planes and collision ---------- */
     int  boxInViewFrustum(int b);
     void createPlaneFromPoly(int dest,int poly);
     int  collisionPointBox(int point,int box);
@@ -69,7 +70,7 @@ public:
     int  collisionVectorPoly(int collPos,int lineV,int polyV,int plane);
     int  collisionVectorPlane(int collPos,int lineV,int plane){ return collisionVectorPoly(collPos,lineV,0,plane); }
 
-    /* ---------- matrizes ---------- */
+    /* ---------- matrices ---------- */
     void setMatrixMode(int mode){ if (mode==0 || mode==0x2000) matrixOrientation = mode; }
     void matrixIdentity();
     void matrixSetCurrent(int ptr);
@@ -90,27 +91,28 @@ public:
     void matrixTranspose();
     void matrixMultiply3x3(int ptr);
 
-    /* ---------- estado ---------- */
+    /* ---------- state ---------- */
     void setViewport(int l,int t,int w,int h){ vpL=l; vpT=t; vpW=w; vpH=h; }
     void setRenderState(int state,int value);
     void setFogColor(int rgb){ fogColor = rgb & 0xffffff; }
     int  getInteger(int param);
     int  getZBufferValue(int x,int y);
     void clearDepth();
-    /* limpa o z-buffer SO se ja foi alocado (3D ativo). Chamado a cada vFlipScreen: o
-       z-buffer do mophun e scratch por-frame, mas jogos como Rally Pro Contest NUNCA
-       chamam vSetZBuffer nem vClearScreen. Sem limpar, o z acumulava a menor
-       profundidade ja vista por pixel -> geometria nova falhava o z-test e SUMIA. */
+    /* Clears the z-buffer ONLY if it has been allocated, i.e. 3D is active. Called on
+       every vFlipScreen: Mophun's z-buffer is per-frame scratch, but games like Rally
+       Pro Contest NEVER call vSetZBuffer or vClearScreen. Without clearing it, z
+       accumulated the smallest depth ever seen per pixel, so new geometry failed the
+       z-test and VANISHED. */
     void clearDepthPerFrame();
 
-    /* ---------- texturas ---------- */
+    /* ---------- textures ---------- */
     int  setTexture(int dataPtr,int format,int lods,int mipCount);
     int  createTexture(int texPtr);
     void setActiveTexture(int handle);
     void deleteTexture(int handle);
     void deleteAllTextures();
 
-    /* ---------- iluminacao ---------- */
+    /* ---------- lighting ---------- */
     void setAmbientLight(int rgb);
     void setCameraPos(int p);
     void resetLights();
@@ -119,16 +121,16 @@ public:
     void setMaterial2(int p);
     void lightPoint(int argsPtr);
 
-    /* ---------- desenho ---------- */
+    /* ---------- drawing ---------- */
     void renderPrimitive(int meshPtr,int topology);
     void renderPrimitiveIndexed(int idxPtr,int idxCount,int meshPtr,int topology);
     void drawPolygon(int p1,int p2,int p3);
     void drawBillboard(int bb);
 
-    /* filtro de textura forcado pelas Configuracoes: 0=segue o jogo, 1=LINEAR, 2=NEAREST */
+    /* texture filter forced from Settings: 0 = follow the game, 1 = LINEAR, 2 = NEAREST */
     int texFilterForce;
 
-    /* instrumentacao (diagnostico; custo desprezivel) */
+    /* instrumentation for diagnostics; the cost is negligible */
     i64 trisDrawn, pixels3d, drawCalls;
 
 private:
@@ -138,34 +140,35 @@ private:
     Pip2*   vm;
     Screen* scr;
 
-    /* matrizes row-major float[16] (m[r*4+c]); v' = M*v */
+    /* row-major float[16] matrices (m[r*4+c]); v' = M*v */
     float current[16], projection[16], light[16];
-    int   matrixOrientation;        /* 0x2000 = ColumnMajor (default) */
+    int   matrixOrientation;        /* 0x2000 = ColumnMajor, the default */
 
     int   vpL, vpT, vpW, vpH;
-    /* escala do z inteiro: 1.0 = 1<<22 */
+    /* scale of the integer z: 1.0 = 1<<22 */
     enum { KZShift = 22 };
-    static const i32 KZFar = 0x7fffffff;   /* vazio */
-    static const i32 KZEps = 1 << 6;       /* ~1,5e-5: o antigo +1e-5f dos decals coplanares */
-    /* JA TENTEI 16 BITS AQUI (como faz a VM oficial) e REVERTI: no Carmageddon 3D o
-       quantizado derruba 7% dos pixels por z-fighting e dobra o desvio medio de cor,
-       enquanto o ganho -- menos trafego de RAM -- e invisivel no PC (o buffer cabe no
-       cache dele) e eu nao tenho como medir no aparelho. Custo medido contra beneficio
-       suposto: nao compensa. Se um dia houver medicao no E63, a conversao e um shift de
-       6 e esta descrita neste comentario. */
+    static const i32 KZFar = 0x7fffffff;   /* empty */
+    static const i32 KZEps = 1 << 6;       /* ~1.5e-5: the old +1e-5f for coplanar decals */
+    /* 16 BITS WAS ALREADY TRIED HERE, as the official VM does, and REVERTED: in
+       Carmageddon 3D the quantisation loses 7% of the pixels to z-fighting and doubles
+       the mean colour deviation, while the gain -- less RAM traffic -- is invisible on a
+       PC, where the buffer fits in cache, and cannot be measured on the phone. A
+       measured cost against a supposed benefit: not worth it. If a measurement on the
+       E63 ever becomes possible, the conversion is a shift of 6 and is described in this
+       very comment. */
 
-    /* Z-BUFFER INTEIRO (10.22 com sinal, KZShift abaixo). Era float: cada teste de
-       profundidade era um __aeabi_fcmplt no ARM11, um por pixel desenhado -- 153 milhoes
-       deles numa janela de 40M instrucoes do Rally. O emulador OFICIAL da mophun usa
-       z de 16 bits inteiro; 10.22 e mais folgado que isso e ainda cabe num i32.
-       Precisao 2,4e-7 (o z em NDC vive perto de [-1,1]); o antigo epsilon de 1e-5 do
-       caminho com blend virou KZEps. KZFar e o "vazio". */
+    /* INTEGER Z-BUFFER (signed 10.22, see KZShift above). It used to be float: every
+       depth test was an __aeabi_fcmplt on the ARM11, one per pixel drawn -- 153 million
+       of them in a 40M-instruction window of Rally. Mophun's OFFICIAL emulator uses a
+       16-bit integer z; 10.22 is roomier than that and still fits in an i32.
+       Precision is 2.4e-7, and z in NDC lives close to [-1,1]; the old 1e-5 epsilon of
+       the blended path became KZEps. KZFar is the "empty" value. */
     i32* zbuf; int zW, zH;
 
-    /* render states (defaults = comportamento verificado no acervo de jogos) */
-    int  cullMode;                  /* DEFAULT = CounterClockwise (2) -> culling LIGADO */
+    /* render states; the defaults are the behaviour verified across the game archive */
+    int  cullMode;                  /* DEFAULT = CounterClockwise (2) -> culling IS ON */
     bool textureMode;
-    bool transp3d;                  /* state 15: indice 0 da textura = transparente */
+    bool transp3d;                  /* state 15: texture index 0 is transparent */
     int  shadeMode;                 /* state 7:  1=FLAT, 2=GOURAUD (default) */
     int  texBlendMode;              /* state 11: 1=DECAL, 2=MODULATE (default), 4=ADD */
     int  colorBlend;                /* state 20: 0=REPLACE,1=ALPHAADD,2=ALPHA,3=MODULATE */
@@ -181,15 +184,15 @@ private:
     bool specularEnable;            /* state 16 */
     int  filterMode;                /* state 13: 1=NEAREST, 2=LINEAR, 4/8/16/32=mip* */
 
-    /* textura ativa */
+    /* the active texture */
     int  texturePtr, textureFormat, textureW, textureH;
-    u32* activePalette;             /* paleta EMBUTIDA (formatos 16-19); 0 = paleta de tela */
+    u32* activePalette;             /* EMBEDDED palette (formats 16-19); 0 = the screen palette */
     int  activePalCount;
 
-    /* texturas gerenciadas (vCreateTexture -> handle) */
+    /* managed textures (vCreateTexture -> handle) */
     Tex* managed; int managedCap, nextTexHandle;
 
-    /* iluminacao */
+    /* lighting */
     int   ambientScene;
     float lights[MAXL][16];
     bool  lightUsed[MAXL];
@@ -198,7 +201,7 @@ private:
     float matShininess;
     float camX,camY,camZ;
 
-    /* buffers de vertice reutilizados (crescem sob demanda) */
+    /* reused vertex buffers, grown on demand */
     float* bClip;  /* count*4 */
     int*   bCol;   /* count   */
     float* bUv;    /* count*2 */
