@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=wolphun emulator
+GenericName=Mophun emulator
+GenericName[pt_BR]=Emulador Mophun
+Comment=Play Mophun (PIP2) mobile games
+Comment[pt_BR]=Jogue jogos de celular Mophun (PIP2)
+Exec=wolphun %f
+TryExec=wolphun
+Icon=wolphun
+Terminal=false
+Categories=Game;Emulator;
+Keywords=mophun;pip2;emulator;emulador;mpn;j2me;sony ericsson;
+StartupNotify=true
+StartupWMClass=mophun-Emulator

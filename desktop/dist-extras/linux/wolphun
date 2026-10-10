@@ -1,0 +1,22 @@
+#!/bin/sh
+# wolphun emulator - lancador Linux (Debian/Ubuntu)
+# O .jar e independente de plataforma; so precisa de um Java 8+ com Swing.
+set -e
+JAR=/usr/lib/wolphun/wolphun.jar
+
+if [ -n "$JAVA_HOME" ] && [ -x "$JAVA_HOME/bin/java" ]; then
+  JAVA="$JAVA_HOME/bin/java"
+elif command -v java >/dev/null 2>&1; then
+  JAVA=java
+else
+  MSG="wolphun: Java nao encontrado.
+Instale com:  sudo apt install default-jre"
+  echo "$MSG" >&2
+  # se foi aberto pelo menu de aplicativos nao ha terminal p/ ler o erro
+  if command -v zenity >/dev/null 2>&1; then zenity --error --text="$MSG" 2>/dev/null || true
+  elif command -v kdialog >/dev/null 2>&1; then kdialog --error "$MSG" 2>/dev/null || true
+  fi
+  exit 1
+fi
+
+exec "$JAVA" -Xmx768m -jar "$JAR" "$@"

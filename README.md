@@ -17,11 +17,11 @@ exactly like on the real hardware — instead of re-implementing each game.
 
 Three front-ends, one core:
 
--  **Desktop** (Java SE) — GUI with a ROM library, save states, video/sound settings, and a one-click packaged `.exe`.
--  **Android** (7.0+) — touch UI with an on-screen keypad you can **move and resize per game**, and a multi-language interface.
--  **Symbian S60 3rd Edition** — a **native C++ port** that runs on the real Nokia hardware of the era (E63, E71, N95, N73, E61…). Ready-to-install `.sisx` packages included.
+- **Desktop** (Java SE) — GUI with a ROM library, save states, video/sound settings, and a one-click packaged `.exe`.
+- **Android** (7.0+) — touch UI with an on-screen keypad you can **move and resize per game**, and a multi-language interface.
+- **Symbian S60 3rd Edition** — a **native C++ port** that runs on the real Nokia hardware of the era (E63, E71, N95, N73, E61…). Ready-to-install `.sisx` packages included.
 
-##  Screenshots
+## Screenshots
 
 <p align="center">
   <img src="docs/screenshots/library.jpg" width="620" alt="The desktop ROM library, with search and a preview of the selected game">
@@ -44,9 +44,9 @@ Three front-ends, one core:
 
 > These are from the desktop build. The games run from their original, unmodified bytecode.
 
-##  What's new in 0.3.0-beta
+## What's new in 0.3.0-beta
 
-###  New platform: Symbian S60 3rd Edition
+### New platform: Symbian S60 3rd Edition
 
 wolphun now runs **natively on the phones these games were sold for**. This is not the Java
 core on a JVM — it is a **from-scratch C++98 port** of the PIP2 VM and the whole SDK layer,
@@ -91,31 +91,31 @@ runs inside each tick rather than just capping frames.
 > as a binary**: the ARM compiler bundled with that 2005 SDK is a cygwin build that
 > segfaults on modern Windows.
 
-###  Desktop
+### Desktop
 
--  **Screenshots** — `F12` captures the game, `Shift+F12` the whole window, saved as PNG.
--  **Texture filter (3D)** — follow the game, force bilinear, or force nearest.
--  **Keyboard presets** and **phone keys** — several games read the raw handset keys
+- **Screenshots** — `F12` captures the game, `Shift+F12` the whole window, saved as PNG.
+- **Texture filter (3D)** — follow the game, force bilinear, or force nearest.
+- **Keyboard presets** and **phone keys** — several games read the raw handset keys
   (Sony Ericsson 202–217) instead of the button bits; they are now mapped and remappable.
--  **`vBeep` sound** — the games' simple tone channel now plays.
--  **Theme readability** fixes, and **`F11`** to maximize the game window.
+- **`vBeep` sound** — the games' simple tone channel now plays.
+- **Theme readability** fixes, and **`F11`** to maximize the game window.
 
-###  Android
+### Android
 
--  **Vibration** — games that ask for it (Honey Cave 2 on damage) now vibrate, with an
+- **Vibration** — games that ask for it (Honey Cave 2 on damage) now vibrate, with an
   on/off switch in Settings.
--  **On-screen keypad layouts** — auto, phone keypad, numbers, arrows, gamepad and mixed
+- **On-screen keypad layouts** — auto, phone keypad, numbers, arrows, gamepad and mixed
   presets, on top of the existing per-game move & resize.
--  **Per-ROM phone-key detection** — the loader statically analyses the game and shows only
+- **Per-ROM phone-key detection** — the loader statically analyses the game and shows only
   the handset keys it actually reads, so the keypad is not cluttered with dead buttons.
--  **Screenshots** and **texture filter**, matching the desktop.
--  **Bulk ROM import** and a clearer empty-library screen.
+- **Screenshots** and **texture filter**, matching the desktop.
+- **Bulk ROM import** and a clearer empty-library screen.
 
-###  Both GUIs
+### Both GUIs
 
 - The **About** dialog now shows a Ko-fi QR code and link, if you'd like to support the project.
 
-##  Features
+## Features
 
 - **Faithful PIP2 VM** — interprets the original game bytecode (116 opcodes); the game logic is the *real* one.
 - **2D graphics** — sprites (multiple pixel formats), animated tilemaps, fills, lines, flat polygons, palette handling, transparency.
@@ -128,7 +128,7 @@ runs inside each tick rather than just capping frames.
 - **Android** — customizable on-screen controls (drag & pinch-to-resize, saved per game, à la J2ME-Loader / PPSSPP), a **6-language UI** (EN/ES/DE/PT/UK/RU), and shared-folder ROM support.
 - **Symbian** — a native C++98 port for real S60 3rd Edition hardware: fixed-point software rasterizer, Avkon UI, the same 6-language interface, full-screen mode, vibration, and a battery-safety CPU limiter.
 
-##  Build & run
+## Build & run
 
 ### Desktop (Java 8+)
 ```bat
@@ -167,7 +167,7 @@ build.cmd fp1          REM Symbian 9.2+     (build.cmd 3rd for 9.1)
 
 >  You provide your own game files — **this project does not include any game ROMs.**
 
-##  Repository layout
+## Repository layout
 ```
 desktop/    Java SE version   (PIP2 VM + software SDK + Swing GUI)
 android/    Android version   (same VM core + SurfaceView + touch UI)
@@ -180,18 +180,19 @@ The Java emulation core (`wolphun.vm.*`) is shared between the desktop and Andro
 front-ends; only the platform layer (display, audio, input) differs. The Symbian port is
 an independent C++ implementation of the same VM and SDK semantics.
 
-##  Credits & references
+## Credits & references
 
 wolphun was written by studying open-source Mophun preservation projects. Huge thanks to:
 
 - **[nofun](https://github.com/RadratSoftworks/nofun)** by *RadratSoftworks* — the C# Mophun emulator used as the **authoritative reference** for SDK / VMGP behaviour (graphics, input, sound, device caps, and the 3D pipeline). A large part of wolphun's SDK layer follows nofun's semantics.
 - **[MoRePhun](https://github.com/Luca1991/MoRePhun)** — reference for the PIP2 opcodes.
-- **[TinySoundFont & TinyMidiLoader](https://github.com/schellingb/TinySoundFont)** by *Bernhard Schelling* (public domain) — bundled in `android/app/src/main/cpp/` to power the Android SoundFont (.sf2) playback.
+- **[TinySoundFont & TinyMidiLoader](https://github.com/schellingb/TinySoundFont)** by *Bernhard Schelling* — bundled in `android/app/src/main/cpp/` to power the Android SoundFont (.sf2) playback. `tsf.h` is MIT, `tml.h` is zlib; both keep their own licence, reproduced in the files and listed in [NOTICE](NOTICE).
 
-wolphun is an **independent reimplementation in Java** — no code was copied from the
-projects above; they were used to understand the platform's behaviour.
+wolphun is an **independent reimplementation** (Java on desktop and Android, C++ on
+Symbian) — no code was copied from the projects above; they were used to understand the
+platform's behaviour.
 
-##  Support the project
+## Support the project
 
 wolphun is free and open source. If it brought a game back for you, you can buy me a coffee:
 
@@ -199,9 +200,15 @@ wolphun is free and open source. If it brought a game back for you, you can buy 
 
 The same link (and a QR code for it) is in **Help → About** inside the emulator, on desktop and Android.
 
-##  License
+## License
 
-Released under the **GNU GPL-3.0** — see [LICENSE](LICENSE).
+Released under the **Apache License 2.0** — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+You may use, modify and redistribute it, including in closed-source and commercial work,
+as long as you keep the copyright and licence notices and state what you changed. The
+licence also grants an explicit patent licence from the contributors.
+
+Bundled third-party files keep their own licences; see [NOTICE](NOTICE).
 
 ---
 
