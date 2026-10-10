@@ -1,8 +1,8 @@
-/* Screen.cpp - port de src/wolphun/Screen.java (ver Screen.h). */
+/* Screen.cpp - ported from src/wolphun/Screen.java (see Screen.h). */
 #include "Screen.h"
 #include "sysfont.h"
 
-/* arredondamento inteiro de (v * num / den), equivalente ao Math.round(float) do Java */
+/* integer rounding of (v * num / den), equivalent to Java's Math.round(float) */
 static inline int rnd(int v, int num, int den){ return (v*num*2 + den) / (den*2); }
 
 Screen::Screen(int w_, int h_, ScreenHost* host_)
@@ -27,7 +27,7 @@ void Screen::initRgb332Palette(){
               | ((u32)rnd(r,255,7) << 16)
               | ((u32)rnd(g,255,7) << 8)
               |  (u32)rnd(b,255,3);
-        palette[i]=c; rgb332[i]=c;   /* rgb332 fica FIXO; palette pode ser sobrescrita pelo jogo */
+        palette[i]=c; rgb332[i]=c;   /* rgb332 stays FIXED; palette can be overwritten by the game */
     }
 }
 
@@ -41,10 +41,11 @@ int Screen::argbToRgb555(u32 argb){
     return ((r>>3)<<10) | ((g>>3)<<5) | (b>>3);
 }
 
-/* vSetClipWindow(x0,y0,x1,y1): o SDK e INCLUSIVO (x1/y1 = ultima coluna/linha, igual
-   vFillRect - vmgp.h "Right position"). Guardamos exclusivo [x0,x1) somando 1, p/ os
-   consumidores manterem `>=clipX1`. Sem isto, um clip de 1 linha (reveal de logo)
-   virava range vazio e nada aparecia. */
+/* vSetClipWindow(x0,y0,x1,y1): the SDK is INCLUSIVE (x1/y1 are the last column and
+   row, like vFillRect -- vmgp.h calls it "Right position"). We store it exclusive,
+   [x0,x1), by adding 1, so consumers can keep using `>=clipX1`. Without that, a
+   one-row clip -- a logo reveal, for instance -- became an empty range and nothing
+   appeared. */
 void Screen::setClip(int x0,int y0,int x1,int y1){
     if (x0>x1){ int t=x0; x0=x1; x1=t; }
     if (y0>y1){ int t=y0; y0=y1; y1=t; }
@@ -60,9 +61,9 @@ void Screen::present(){
     flips++;
     if (host){
         host->Present();
-        /* frame pacing: vFlipScreen deve acompanhar o refresh do aparelho. Aqui so
-           registramos o instante; a espera real (se houver) fica a cargo da casca,
-           que conhece o laco de eventos do sistema. */
+        /* Frame pacing: vFlipScreen is meant to follow the device's refresh. Here we
+           only record the moment; the actual wait, if any, is the shell's job, since it
+           is the part that knows the system's event loop. */
         lastFlipMs = host->TickMs();
     }
 }
@@ -71,14 +72,14 @@ int Screen::messageBox(const char* title, const char* msg){
     return host ? host->MessageBox(title, msg) : 1;
 }
 
-/* ---------------- fonte do sistema (bitmap embutida) ---------------- */
+/* ---------------- the system font (embedded bitmap) ---------------- */
 
-/* vSelectFont(size, flags) (vmgp.h):
-     bit31 (FONT_SIZE_PIXEL_FLAG)  -> bits baixos = altura em PIXELS
-     bit30 (FONT_SIZE_POINTS_FLAG) -> bits baixos = altura em POINTS (~4/3 px)
-     senao -> preset relativo (0=Normal/1=Small/2=Large)
-   Com fonte bitmap de altura fixa (SYSFONT_HEIGHT), atendemos o pedido escolhendo a
-   maior ESCALA INTEIRA que ainda cabe na altura pedida. */
+/* vSelectFont(size, flags), from vmgp.h:
+     bit31 (FONT_SIZE_PIXEL_FLAG)  -> the low bits are a height in PIXELS
+     bit30 (FONT_SIZE_POINTS_FLAG) -> the low bits are a height in POINTS (~4/3 px)
+     otherwise -> a relative preset (0 = Normal, 1 = Small, 2 = Large)
+   With a fixed-height bitmap font (SYSFONT_HEIGHT), the request is honoured by picking
+   the largest INTEGER SCALE that still fits inside the height asked for. */
 void Screen::selectFont(int size, int flags){
     lastFontSize = size; lastFontFlags = flags;
     int px;
@@ -119,7 +120,7 @@ void Screen::drawText(int x,int y,const char* s,u32 argbFg){
             if (!bits){ continue; }
             for (int col=0; col<cw; col++){
                 if ((bits & (1u<<col)) == 0) continue;
-                /* expande pela escala inteira */
+                /* expand by the integer scale */
                 int bx = penX + col*fontScale, by = y + row*fontScale;
                 for (int oy=0; oy<fontScale; oy++)
                     for (int ox=0; ox<fontScale; ox++)

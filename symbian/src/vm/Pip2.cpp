@@ -1,4 +1,4 @@
-/* Pip2.cpp - port de src/wolphun/vm/Pip2.java (ver Pip2.h). */
+/* Pip2.cpp - ported from src/wolphun/vm/Pip2.java (see Pip2.h). */
 #include "Pip2.h"
 #include "Sdk.h"
 
@@ -45,13 +45,13 @@ void Pip2::layoutAndLoad(int heapBytes, int stackBytes){
 
     wpMemCopy(mem + (codeBase-base), exe->all + exe->codeOff, exe->codeSize);
     wpMemCopy(mem + (dataBase-base), exe->all + exe->dataOff, exe->dataSize);
-    /* bss ja zerado */
+    /* bss is already zeroed */
 
     relocate();
 
     R[SP>>2] = stackTop;
     R[FP>>2] = stackTop;
-    R[PC>>2] = codeBase;   /* entry point = inicio do codigo */
+    R[PC>>2] = codeBase;   /* entry point = the start of the code */
 }
 
 void Pip2::relocate(){
@@ -73,7 +73,7 @@ void Pip2::relocate(){
                 write32(addr, v + b);
                 poolValue[i] = (u32)(v + b); break;
             }
-            case 5: case 6: /* Swap16/32 (host LE: sem troca) */
+            case 5: case 6: /* Swap16/32; the host is LE, so no swap */
                 poolValue[i] = (u32)it.meta; break;
             case 8: { /* SymAdd: poolItems[meta-1] + target */
                 int ref = it.meta-1;
@@ -86,9 +86,9 @@ void Pip2::relocate(){
 }
 
 void Pip2::runConstructors(){
-    /* O toolchain mophun exporta um Global "~C" apontando p/ a __CTOR_LIST__
-       (lista de enderecos de construtores em data, terminada em 0). Jogos em C
-       puro (ex.: HC2) nao tem "~C" -> no-op. */
+    /* The Mophun toolchain exports a Global called "~C" pointing at __CTOR_LIST__,
+       a NUL-terminated list of constructor addresses living in data. Games written in
+       plain C (Honey Cave 2, for one) have no "~C", so this is a no-op. */
     i64 listAddr = -1;
     for (int i=0;i<exe->poolCount;i++){
         Vmgp::PoolItem& it = exe->pool[i];
@@ -96,14 +96,14 @@ void Pip2::runConstructors(){
     }
     if (listAddr < 0) return;
     int addr = (int)listAddr;
-    for (int n=0; n<256; n++){           /* enderecos absolutos ate o terminador 0 */
+    for (int n=0; n<256; n++){           /* absolute addresses up to the 0 terminator */
         int ctor = read32(addr); addr += 4;
         if (ctor==0) break;
         callFunction(ctor);
     }
 }
 
-/* Chama uma funcao da VM (PC=fn, RA=sentinela) e roda ate retornar. */
+/* Calls a VM function (PC=fn, RA=sentinel) and runs until it returns. */
 void Pip2::callFunction(int fn){
     const int SENT = 0xFFFC;
     int sRA=R[RA>>2], sPC=R[PC>>2], sSP=R[SP>>2], sFP=R[FP>>2]; bool sStop=stopped;
@@ -116,12 +116,12 @@ void Pip2::callFunction(int fn){
 u32 Pip2::fetchImm(){
     int w = read32(R[PC>>2]); R[PC>>2]+=4;
     if ((w & 0x80000000)!=0) return (u32)decodeRaw(w);
-    int i = w - 1;                       /* refs de pool sao 1-based */
+    int i = w - 1;                       /* pool references are 1-based */
     if (i>=0 && i<exe->poolCount) return poolValue[i];
     return 0;
 }
 
-/* ---------------- multitarefa cooperativa ---------------- */
+/* ---------------- cooperative multitasking ---------------- */
 Pip2::Task* Pip2::findTask(int id){
     for (Task* t=allHead; t; t=t->lnext) if (t->id==id) return t;
     return 0;
@@ -181,7 +181,7 @@ void Pip2::disposeTask(int id){
     if (t!=currentTask) delete t;
 }
 void Pip2::yieldTask(){
-    if (queueEmpty()) return;            /* nada p/ alternar */
+    if (queueEmpty()) return;            /* nothing to switch to */
     if (!currentTask) currentTask = mainTask();
     saveCurrentTask();
     enqueue(currentTask);
@@ -200,7 +200,7 @@ void Pip2::terminateTask(){
     loadTask(dequeue());
 }
 
-/* ---------------- execucao ---------------- */
+/* ---------------- execution ---------------- */
 void Pip2::run(i64 maxInstr){
     i64 end = instr + maxInstr;
     while (!stopped && instr<end) step();
@@ -208,13 +208,13 @@ void Pip2::run(i64 maxInstr){
 
 void Pip2::step(){
     int pc0 = R[PC>>2];
-    if (pc0==TASK_END){ terminateTask(); return; }   /* tarefa retornou p/ sentinela */
-    if (pc0==0){                                      /* ret p/ RA=0 = fim limpo */
+    if (pc0==TASK_END){ terminateTask(); return; }   /* the task returned to the sentinel */
+    if (pc0==0){                                      /* a return to RA=0 is a clean exit */
         if (!queueEmpty()){ terminateTask(); return; }
         stopped=true; return;
     }
     if (!derailed && (pc0 < codeBase || pc0 >= codeBase+exe->codeSize)){
-        derailed=true; stopped=true; return;          /* PC fora do codigo: aborta seguro */
+        derailed=true; stopped=true; return;          /* PC outside the code: abort safely */
     }
 
     int word = read32(pc0); R[PC>>2]=pc0+4;
@@ -269,7 +269,7 @@ void Pip2::step(){
         case 0x29: w16(d, r16(s)<<t); break;                                       /* SLLH */
         case 0x2A: w16(d, (int)((u32)(r16(s)) >> t)); break;                       /* SRLH */
         case 0x2B: w16(d, sx16(r16(s))>>t); break;                                 /* SRAH */
-        /* ---- branch imediato (brI): offset = (sbyte(t)-1)*4 ---- */
+        /* ---- immediate branch (brI): offset = (sbyte(t)-1)*4 ---- */
         case 0x2C: if(r32(d)==sx8(s)) brI(t); break;                               /* BEQI */
         case 0x2D: if(r32(d)!=sx8(s)) brI(t); break;                               /* BNEI */
         case 0x2E: if(r32(d)>=sx8(s)) brI(t); break;                               /* BGEI */
@@ -317,7 +317,7 @@ void Pip2::step(){
         case 0x58: { int a=r32(s)+(int)fetchImm(); w32(d, read8(a)); break; }      /* LDBUd */
         case 0x59: { int a=r32(s)+(int)fetchImm(); w32(d, read16(a)); break; }     /* LDHUd */
         case 0x5A: w32(d, (int)fetchImm()); break;                                 /* LDI */
-        case 0x5B: {   /* JPl: imediato RAW = pc-relativo; ref de POOL = endereco ABSOLUTO. */
+        case 0x5B: {   /* JPl: a RAW immediate is pc-relative; a POOL reference is ABSOLUTE. */
             int pcb=R[PC>>2]; int info=read32(pcb);
             if ((info & 0x80000000)!=0){ int raw=decodeRaw(info); R[PC>>2]=pcb+raw-4; }
             else { int pidx=info-1; R[PC>>2]=(pidx>=0 && pidx<exe->poolCount)? (int)poolValue[pidx] : (pcb+4); }
@@ -335,7 +335,7 @@ void Pip2::step(){
         case 0x65: brR(r32(d)<r32(s)); break;                                      /* BLT */
         case 0x66: brR((u32)r32(d)<(u32)r32(s)); break;                            /* BLTU */
         default:
-            /* opcode nao implementado: aborta seguro (sem console no aparelho). */
+            /* unimplemented opcode: abort safely -- there is no console on the phone. */
             stopped=true;
     }
 }
@@ -345,18 +345,18 @@ void Pip2::brR(bool cond){
     else { R[PC>>2]+=4; }
 }
 void Pip2::calll(){
-    int pc = R[PC>>2];               /* aponta p/ infoWord */
+    int pc = R[PC>>2];               /* points at infoWord */
     int info = read32(pc);
     if ((info & 0x80000000)!=0){
         int raw = decodeRaw(info);
         w32(RA, pc+4);
         R[PC>>2] = pc + raw - 4;
     } else {
-        int pidx = info - 1;         /* refs de pool sao 1-based */
+        int pidx = info - 1;         /* pool references are 1-based */
         if (pidx>=0 && pidx<exe->poolCount && poolIsImport[pidx]){
             R[PC>>2] = pc+4;
             if (sdk){
-                if (poolApiId[pidx] == -2)            /* resolve uma unica vez */
+                if (poolApiId[pidx] == -2)            /* resolve it exactly once */
                     poolApiId[pidx] = Sdk::resolve(poolName[pidx]);
                 sdk->invokeId(poolApiId[pidx]);
             }

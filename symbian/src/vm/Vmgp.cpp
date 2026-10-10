@@ -1,4 +1,4 @@
-/* Vmgp.cpp - port de src/wolphun/vm/Vmgp.java (ver Vmgp.h). */
+/* Vmgp.cpp - ported from src/wolphun/vm/Vmgp.java (see Vmgp.h). */
 #include "Vmgp.h"
 #include "MophunCrypt.h"
 
@@ -15,7 +15,7 @@ Vmgp::~Vmgp(){
     delete[] pool;
     delete[] resStart;
     delete[] resLen;
-    /* archiveZip aponta p/ dentro de `all` (fatia), NAO alocado separado: nao deletar. */
+    /* archiveZip points INTO `all` -- a slice, not a separate allocation, so do not delete it. */
 }
 
 Vmgp* Vmgp::Create(const u8* d, int len, const char** err){
@@ -25,24 +25,25 @@ Vmgp* Vmgp::Create(const u8* d, int len, const char** err){
     v->all = new u8[len];
     wpMemCopy(v->all, d, len);
 
-    /* DRM: nas ROMs originais da Sony Ericsson a secao de CODIGO vem cifrada (o
-       cabecalho nao). Sem decifrar, o parse passa e a VM executa ruido: o PC sai da
-       area de codigo na primeira instrucao e a tela fica preta para sempre -- foi
-       exatamente o que acontecia no E63 e no EKA2L1.
-       Decifra aqui, na copia em memoria; o arquivo do usuario nunca e alterado. */
+    /* DRM: in Sony Ericsson's original ROMs the CODE section is encrypted, though the
+       header is not. Without decrypting, the parse succeeds and the VM then executes
+       noise: PC leaves the code area on the first instruction and the screen stays
+       black forever -- which is exactly what happened on the E63 and in EKA2L1.
+       Decryption happens here, on the in-memory copy; the user's file is never
+       modified. */
     const bool looked    = MophunCrypt::looksEncrypted(v->all, len);
     const bool decrypted = looked && MophunCrypt::decryptInPlace(v->all, len);
 
-    /* O parse vem primeiro mesmo quando a decifragem falhou: uma ROM "packed"
-       (S60/PPC, comprimida) tambem parece ruido para a heuristica, e a mensagem
-       dela e mais util que a de DRM. */
+    /* The parse comes first even when decryption failed: a "packed" ROM (the
+       compressed S60/PPC kind) also looks like noise to the heuristic, and its message
+       is more useful than the DRM one. */
     if (!v->parse(err)){ delete v; return 0; }
 
     if (looked && !decrypted)
     {
-        /* passou no parse (cabecalho e texto claro) mas o codigo continua cifrado:
-           executar isso daria tela preta. Melhor dizer o que houve. */
-        *err = "ROM protegida por DRM: nenhuma chave Sony Ericsson serve para este arquivo.";
+        /* It parsed -- the header is plaintext -- but the code is still encrypted, and
+           running that would give a black screen. Better to say what happened. */
+        *err = "DRM-protected ROM: no Sony Ericsson key fits this file.";
         delete v; return 0;
     }
     v->wasEncrypted = decrypted;
@@ -55,7 +56,7 @@ bool Vmgp::parse(const char** err){
     const char* dummy; if (!err) err = &dummy;
 
     if (len < HEADER_SIZE || d[0]!='V'||d[1]!='M'||d[2]!='G'||d[3]!='P'){
-        *err = "Nao e um arquivo VMGP valido (.mpn descriptografado)";
+        *err = "Not a valid VMGP file (a decrypted .mpn)";
         return false;
     }
     heapRaw   = rdU32(d,4);
@@ -66,7 +67,7 @@ bool Vmgp::parse(const char** err){
     dataSize  = (int)rdU32(d,16);
     bssSize   = (int)rdU32(d,20);
     resSize   = (int)rdU32(d,24);
-    /* rdU32(d,28) = unk / packed-end */
+    /* rdU32(d,28) = unknown / packed-end */
     poolCount = (int)rdU32(d,32);
     stringSize= (int)rdU32(d,36);
 
@@ -76,13 +77,14 @@ bool Vmgp::parse(const char** err){
     poolOff = resOff + resSize;
     strOff  = poolOff + poolCount * 8;
 
-    /* ROM "packed" (S60/PPC): code+data comprimidos (LZ). O campo @28 (0 em ROMs
-       normais) guarda o fim de code+data comprimidos; os tamanhos do header sao os
-       DESCOMPRIMIDOS, entao poolOff cai alem do arquivo. Nao descomprimimos aqui:
-       erro claro (use a versao "_decompressed" do ROM). */
+    /* A "packed" ROM (S60/PPC) has code+data LZ-compressed. Field @28, which is 0 in
+       normal ROMs, holds the end of the compressed code+data; the sizes in the header
+       are the UNCOMPRESSED ones, so poolOff lands past the end of the file. We do not
+       decompress here -- a clear error instead, pointing at the "_decompressed"
+       version of the ROM. */
     u32 u28 = rdU32(d,28);
     if (u28 != 0 || (i64)strOff + stringSize > (i64)len){
-        *err = "ROM comprimido (packed S60/PPC) nao suportado - use a versao descompactada (\"_decompressed\").";
+        *err = "Compressed ROM (packed S60/PPC) is not supported - use the \"_decompressed\" version.";
         return false;
     }
 
@@ -97,7 +99,7 @@ bool Vmgp::parse(const char** err){
         pool[i].target     = (int)tgt;
     }
 
-    /* tabela de recursos: offsets relativos a resOff, terminada por 0. */
+    /* the resource table: offsets relative to resOff, terminated by a 0. */
     int maxRes = (poolOff - resOff) / 4;
     if (maxRes < 0) maxRes = 0;
     int* tmp = new int[maxRes > 0 ? maxRes : 1];
@@ -120,13 +122,13 @@ bool Vmgp::parse(const char** err){
     }
     delete[] tmp;
 
-    scanEmbeddedZip();  /* STUB nesta etapa */
+    scanEmbeddedZip();  /* STUB at this stage */
     return true;
 }
 
-/* STUB: o VFS de ZIP embutido sera portado numa etapa dedicada (precisa inflate).
-   Sem ele, jogos 3D que guardam assets num ZIP recebem arquivos vazios; jogos 2D
-   e 3D simples nao sao afetados. */
+/* STUB: the embedded-ZIP VFS will be ported in a dedicated step, since it needs
+   inflate. Without it, 3D games that keep their assets in a ZIP get empty files; 2D
+   games and straightforward 3D ones are unaffected. */
 void Vmgp::scanEmbeddedZip(){
     archiveZip = 0;
     archiveZipLen = 0;
@@ -138,7 +140,7 @@ const u8* Vmgp::vfsGet(const char* /*name*/, int* outLen) const {
 }
 
 const char* Vmgp::getString(int off) const {
-    /* strings sao 0-terminadas dentro de `all`; devolve ponteiro direto. */
+    /* strings are NUL-terminated inside `all`, so this returns a direct pointer. */
     int p = strOff + off;
     if (p < 0 || p >= allLen) return "";
     return (const char*)(all + p);

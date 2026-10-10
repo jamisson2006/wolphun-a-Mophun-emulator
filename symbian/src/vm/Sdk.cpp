@@ -1,14 +1,14 @@
-/* Sdk.cpp - port de src/wolphun/vm/Sdk.java (ver Sdk.h).
+/* Sdk.cpp - ported from src/wolphun/vm/Sdk.java (see Sdk.h).
  *
- * Os comentarios explicativos do original (o PORQUE de cada decisao, descoberto
- * testando jogos reais) foram preservados: eles sao o valor do emulador.
+ * The explanatory comments from the original -- the WHY behind each decision, found by
+ * testing real games -- were kept: they are where this emulator's value lives.
  */
 #include "Sdk.h"
 #include "Pip2.h"
 #include "Screen.h"
 #include "SdkIds.h"
 
-/* ================= IntMap (enderecamento aberto) ================= */
+/* ================= IntMap (open addressing) ================= */
 IntMap::IntMap() : keys(0), vals(0), state(0), cap(0), count(0) { grow(); }
 IntMap::~IntMap(){ delete[] keys; delete[] vals; delete[] state; }
 
@@ -73,18 +73,18 @@ bool IntMap::next(int* it,int* key,int* val) const {
     return false;
 }
 
-/* ================= tabela de APIs (nome -> id) ================= */
-/* Aliases compartilham o mesmo id. resolve() faz busca linear, mas e chamada UMA
-   vez por entrada de pool (o Pip2 guarda o id), nunca no caminho quente. */
+/* ================= the API table (name -> id) ================= */
+/* Aliases share one id. resolve() does a linear search, but it is called ONCE per pool
+   entry -- Pip2 caches the id -- and never on the hot path. */
 
 struct ApiEntry { const char* name; int id; };
 static const ApiEntry kApi[] = {
-    /* memoria */
+    /* memory */
     {"vNewPtr",A_alloc},{"vMalloc",A_alloc},{"vNewPtrDbg",A_alloc},
     {"vNewPtrClear",A_allocClear},{"vAllocClear",A_allocClear},{"vCallocPtr",A_allocClear},
     {"vDisposePtr",A_free},{"vFreePtr",A_free},
     {"vMemFree",A_memFree},{"vMaxFreeBlock",A_memFree},{"vMemAvail",A_memFree},
-    /* sistema */
+    /* system */
     {"vGetTickCount",A_getTickCount},{"vGetTime",A_getTime},
     {"vGetTimeDate",A_getTimeDate},{"vGetTimeDateUTC",A_getTimeDate},
     {"vGetRandom",A_getRandom},{"vSetRandom",A_setRandom},
@@ -101,7 +101,7 @@ static const ApiEntry kApi[] = {
     {"vFrameTickCount",A_frameTickCount},{"vYieldToSystem",A_yieldToSystem},
     {"vWaitVBL",A_waitVBL},
     {"vTestKey",A_testKey},{"vScanKeys",A_scanKeys},{"vBeep",A_beep},
-    /* graficos */
+    /* graphics */
     {"vClearScreen",A_clearScreen},{"vFlipScreen",A_flipScreen},
     {"vSetForeColor",A_setForeColor},{"vSetBackColor",A_setBackColor},
     {"vSetPaletteEntry",A_setPaletteEntry},{"vGetPaletteEntry",A_getPaletteEntry},
@@ -142,7 +142,7 @@ static const ApiEntry kApi[] = {
     {"vLimit",A_limit},
     {"vGetSupportedRenderStates",A_getSupportedRenderStates},
     {"vSetDisplayWindow",A_setDisplayWindow},
-    /* ---- 3D: pipeline VMGP3D (modulo Renderer3D) ---- */
+    /* ---- 3D: the VMGP3D pipeline (Renderer3D module) ---- */
     {"vInit3D",A_init3D},{"vSetViewport",A_setViewport},{"vSetRenderState",A_setRenderState},
     {"vSetZBuffer",A_setZBuffer},{"vSetTexture",A_setTexture},{"vCreateTexture",A_createTexture},
     {"vSetActiveTexture",A_setActiveTexture},{"vSetFunctionalTexture",A_setFunctionalTexture},
@@ -186,11 +186,11 @@ int Sdk::resolve(const char* name){
     return A_UNKNOWN;
 }
 
-/* ================= construcao ================= */
+/* ================= construction ================= */
 Sdk::Sdk(Pip2* vm_, Screen* scr_)
 : fs(0), audio(0), vibra(0), vsound(vm_), r3d(0), soundEnabled(true),
   deviceModel(2), deviceVendor(3),          /* SonyEricssonT610 / SonyEricsson */
-  videoFormat(7),                           /* 7 = RGB332 (256 cores diretas) */
+  videoFormat(7),                           /* 7 = RGB332, 256 direct colours */
   apiMinor(50), version150(false), stubCalls(0),
   vm(vm_), scr(scr_),
   nextHeap(0), taskStackSize(16384),
@@ -212,7 +212,7 @@ Sdk::Sdk(Pip2* vm_, Screen* scr_)
         streams[i].cap=0; streams[i].pos=0; streams[i].ownsData=false;
         streams[i].writable=false; streams[i].name[0]=0;
     }
-    /* "geracao" do jogo (nofun): quem importa vInit3D = SDK >= 1.50. */
+    /* the game's "generation", as nofun calls it: importing vInit3D means SDK >= 1.50. */
     version150 = vm->exe->importsSymbol("vInit3D");
     if (scr && scr->host) tick0 = scr->host->TickMs();
 }
@@ -224,12 +224,12 @@ Sdk::~Sdk(){
         if (streams[i].used && streams[i].ownsData) delete[] streams[i].data;
 }
 
-/* ================= heap da VM: bump + free list ================= */
+/* ================= the VM heap: bump allocation plus a free list ================= */
 int Sdk::alloc(int size, bool clear){
-    (void)clear;    /* blocos SEMPRE zerados: ver nota abaixo */
+    (void)clear;    /* blocks are ALWAYS zeroed: see the note below */
     if (size < 0) return 0;
     int sz = (size + 7) & ~7; if (sz == 0) sz = 8;
-    /* 1) reusa um bloco livre (first-fit); divide se sobrar */
+    /* 1) reuse a free block (first fit); split it if there is a remainder */
     for (int i=0;i<freeCount;i++){
         if (freeList[i].size >= sz){
             int p = freeList[i].ptr;
@@ -241,15 +241,16 @@ int Sdk::alloc(int size, bool clear){
             }
             freeBytes -= sz;
             liveBlocks.put(p, sz);
-            /* SEMPRE zera bloco REUSADO (mesmo com clear=false): antes da free list todo
-               vNewPtr vinha do bump sobre memoria virgem (=zeros), e os jogos contam com
-               isso - campos que eles nao inicializam ficavam 0. Reusar um bloco sujo
-               entregava LIXO nesses campos. Zerar mantem o comportamento historico. */
+            /* ALWAYS zero a REUSED block, even when clear=false. Before the free list
+               existed, every vNewPtr came from the bump pointer over pristine memory
+               (i.e. zeros), and games rely on that -- fields they never initialise used
+               to be 0. Handing back a dirty block delivered GARBAGE in those fields.
+               Zeroing preserves the historical behaviour. */
             zero(p, sz);
             return p;
         }
     }
-    /* 2) bump */
+    /* 2) bump allocate */
     int p = nextHeap;
     if (p + sz > vm->heapEnd) return 0;
     nextHeap += sz;
@@ -258,8 +259,9 @@ int Sdk::alloc(int size, bool clear){
     return p;
 }
 
-/* libera um bloco: se for o TOPO do heap recua nextHeap (e coalesce blocos livres
-   adjacentes ao topo); senao entra na free list p/ reuso. Ponteiro desconhecido = ignora. */
+/* Frees a block: if it is at the TOP of the heap, nextHeap moves back and free blocks
+   adjacent to the top are coalesced; otherwise it joins the free list for reuse. An
+   unknown pointer is ignored. */
 void Sdk::freePtr(int ptr){
     int sz = 0;
     if (!liveBlocks.remove(ptr, &sz)) return;

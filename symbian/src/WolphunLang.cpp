@@ -1,8 +1,8 @@
-/* WolphunLang.cpp - ver WolphunLang.h. TABELA GERADA (scratchpad/genlang.py):
-   para mexer num texto, mexa no gerador e rode de novo, nao edite aqui. */
+/* WolphunLang.cpp - see WolphunLang.h. GENERATED TABLE: to change a string, change
+   the generator and run it again rather than editing here. */
 #include "WolphunLang.h"
-/* o indice do idioma NAO pode ser um estatico aqui: no alvo 8.1 o app e uma DLL do
-   EKA1, que nao aceita dado estatico mutavel. Ver WolphunWsd.h. */
+/* The language index CANNOT be a static here: on the 8.1 target the app is an EKA1
+   DLL, which does not allow mutable static data. See WolphunWsd.h. */
 #include "WolphunWsd.h"
 
 static const TText* const KStrings[EWolphunStrCount][WolphunLang::EWolphunLangCount] =

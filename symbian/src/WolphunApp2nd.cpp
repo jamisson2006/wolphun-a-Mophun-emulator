@@ -1,21 +1,23 @@
-/* WolphunApp2nd.cpp - Application + Document + ponto de entrada do alvo SYMBIAN 8.1.
+/* WolphunApp2nd.cpp - Application + Document + the entry point for the SYMBIAN 8.1
+ * target.
  *
- * Gemeo do WolphunApp.cpp, que serve o 9.x. Nao da para um arquivo so porque a forma do
- * BINARIO muda, nao so uma chamada:
+ * Twin of WolphunApp.cpp, which serves 9.x. One file cannot do both, because the shape
+ * of the BINARY changes, not just a call:
  *
- *   9.x (EKA2)  o app e um .exe. A entrada e E32Main() e quem monta o framework de UI e
- *               EikStart::RunApplication(), declarado em <eikstart.h>.
- *   8.1 (EKA1)  o app e uma DLL POLIMORFICA chamada wolphun.app. Nao ha E32Main: o
- *               AppArc carrega a DLL e chama o export de ordinal 1, NewApplication().
- *               <eikstart.h> nem existe neste SDK.
+ *   9.x (EKA2)  the app is an .exe. The entry point is E32Main() and the UI framework
+ *               is brought up by EikStart::RunApplication(), from <eikstart.h>.
+ *   8.1 (EKA1)  the app is a POLYMORPHIC DLL called wolphun.app. There is no E32Main:
+ *               AppArc loads the DLL and calls the export at ordinal 1,
+ *               NewApplication(). <eikstart.h> does not even exist in that SDK.
  *
- * O resto -- AppUi, AppView, motor, VM -- e exatamente o mesmo codigo nos dois alvos.
+ * Everything else -- AppUi, AppView, the engine, the VM -- is exactly the same code in
+ * both targets.
  */
 #include <aknapp.h>
 #include <akndoc.h>
 #include "WolphunAppUi.h"
 
-const TUid KUidWolphunApp = { 0xA0000180 };   /* o mesmo UID3 do alvo 9.x */
+const TUid KUidWolphunApp = { 0xA0000180 };   /* the same UID3 as the 9.x target */
 
 /* ---------------- Document ---------------- */
 class CWolphunDocument : public CAknDocument
@@ -50,17 +52,17 @@ CApaDocument* CWolphunApplication::CreateDocumentL()
     return CWolphunDocument::NewL(*this);
 }
 
-/* ---------------- entrada da DLL (EKA1) ---------------- */
+/* ---------------- the DLL entry points (EKA1) ---------------- */
 
-/* Ponto de entrada obrigatorio de qualquer DLL do EKA1. Nao ha nada a inicializar:
-   o estado global mutavel do emulador esta no TLS (ver WolphunWsd.h), que o proprio
-   kernel cria por thread sob demanda. */
+/* The entry point every EKA1 DLL must have. There is nothing to initialise: the
+   emulator's mutable global state lives in TLS (see WolphunWsd.h), which the kernel
+   itself creates per thread on demand. */
 GLDEF_C TInt E32Dll(TDllReason /*aReason*/)
 {
     return KErrNone;
 }
 
-/* Ordinal 1 da DLL: e por aqui que o AppArc instancia o aplicativo. */
+/* The DLL's ordinal 1: this is how AppArc instantiates the application. */
 EXPORT_C CApaApplication* NewApplication()
 {
     return static_cast<CApaApplication*>(new CWolphunApplication);

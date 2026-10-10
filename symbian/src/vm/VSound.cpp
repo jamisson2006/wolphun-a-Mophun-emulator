@@ -1,8 +1,8 @@
-/* VSound.cpp - ver VSound.h */
+/* VSound.cpp - see VSound.h */
 #include "VSound.h"
 #include "Pip2.h"
 
-/* ---------------- tabelas do IMA ADPCM (SNDFORMAT_ADPCM = 2) ---------------- */
+/* ---------------- IMA ADPCM tables (SNDFORMAT_ADPCM = 2) ---------------- */
 static const int IMA_STEP[89] = {
     7,8,9,10,11,12,13,14,16,17,19,21,23,25,28,31,34,37,41,45,50,55,60,66,73,80,88,97,107,118,
     130,143,157,173,190,209,230,253,279,307,337,371,408,449,494,544,598,658,724,796,876,963,
@@ -50,8 +50,9 @@ VSound::Voice* VSound::findVoice(int h)
     return 0;
 }
 
-/* a voz deste handle, ou uma livre. Se nao houver livre, rouba a que nao esta tocando;
-   em ultimo caso a primeira -- melhor cortar um som velho que ignorar o novo. */
+/* The voice for this handle, or a free one. With none free it steals a voice that is
+   not playing, and as a last resort the first one -- better to cut an old sound short
+   than to ignore the new one. */
 VSound::Voice* VSound::takeVoice(int h)
 {
     Voice* v = findVoice(h);
@@ -94,7 +95,7 @@ bool VSound::busy() const
     return false;
 }
 
-/* ---------------- carga de um som (NativeSoundHeader) ---------------- */
+/* ---------------- loading a sound (NativeSoundHeader) ---------------- */
 int VSound::getHandle(int dataPtr)
 {
     if (!enabled || !vm) return -1;
@@ -127,8 +128,8 @@ int VSound::getHandle(int dataPtr)
     }
     else
     {
-        /* 8 bits SEM sinal: silencio e 128, nao 0. Tratar como com sinal da aquele
-           chiado alto que parece defeito do emulador. */
+        /* 8-bit is UNSIGNED: silence is 128, not 0. Treating it as signed produces
+           that loud hiss which looks like an emulator defect. */
         len = bodySize;
         pcm = new i16[len];
         if (!pcm) return -1;
@@ -137,7 +138,7 @@ int VSound::getHandle(int dataPtr)
     }
     if (!pcm || len <= 0){ delete[] pcm; return -1; }
 
-    /* acha um lugar livre */
+    /* find a free slot */
     Snd* s = 0;
     for (int i = 0; i < KMaxSounds; i++) if (!sounds[i].pcm){ s = &sounds[i]; break; }
     if (!s){ delete[] pcm; return -1; }
@@ -153,7 +154,7 @@ int VSound::getHandle(int dataPtr)
     return s->handle;
 }
 
-/* ---------------- controles (SNDCTRL) ---------------- */
+/* ---------------- controls (SNDCTRL) ---------------- */
 int VSound::ctrl(int handle, int control, int param)
 {
     Snd*   s = findSound(handle);
@@ -170,7 +171,7 @@ int VSound::ctrl(int handle, int control, int param)
             v->step = ((i64)s->freq << 16) / KOutRate;
             if (v->step <= 0) v->step = 1;
             {
-                const int lc = param & 0xffff;      /* bits 0-15 = repeticoes; 0xFFFF = infinito */
+                const int lc = param & 0xffff;      /* bits 0-15 = repeats; 0xFFFF = forever */
                 v->loop = (lc == 0xffff) ? -1 : (lc > 0 ? lc : 0);
             }
             v->playing = true;
@@ -180,13 +181,13 @@ int VSound::ctrl(int handle, int control, int param)
         case 2:                                     /* STOP */
         case 3:  if (v) v->playing = false; return 0;   /* PAUSE */
         case 4:  if (v && enabled) v->playing = true; return 0;   /* RESUME */
-        case 5:                                     /* VOLUME 0..127 (-1 = ler) */
+        case 5:                                     /* VOLUME 0..127 (-1 = read it) */
             if (v){ if (param == -1) return v->vol; v->vol = clampi(param, 0, 127); }
             return 0;
-        case 6:                                     /* FREQ: pitch em Hz */
+        case 6:                                     /* FREQ: pitch in Hz */
             if (v && param > 0){ v->step = ((i64)param << 16) / KOutRate; if (v->step <= 0) v->step = 1; }
             return 0;
-        case 7:                                     /* PAN -127..127 (-1 = ler) */
+        case 7:                                     /* PAN -127..127 (-1 = read it) */
             if (v){ if (param == -1) return v->pan; v->pan = clampi(param, -127, 127); }
             return 0;
         case 8:  return (v && v->playing) ? 1 : 0;  /* STATUS */
@@ -199,14 +200,15 @@ int VSound::ctrl(int handle, int control, int param)
 }
 
 /* ---------------- vBeep ----------------
-   vBeep(freq, duracao) toca UM tom. Ha jogos cujo audio e SO isso (Mooktown Tennis,
-   Alpine Ski), entao deixar como no-op e deixar o jogo mudo. Sintetizamos uma onda
-   quadrada -- o timbre de buzzer do aparelho -- e tocamos pelo mixer que ja existe. */
+   vBeep(freq, duration) plays ONE tone. Some games' entire audio is just this
+   (Mooktown Tennis, Alpine Ski), so leaving it as a no-op means leaving the game
+   silent. We synthesise a square wave -- the handset's buzzer timbre -- and play it
+   through the mixer that already exists. */
 void VSound::beep(int freq, int durMs)
 {
     if (!enabled) return;
     if (freq <= 0 || durMs <= 0) return;
-    if (freq > KOutRate/2) freq = KOutRate/2;      /* acima de Nyquist so gera alias */
+    if (freq > KOutRate/2) freq = KOutRate/2;      /* above Nyquist it only aliases */
     if (durMs > 5000) durMs = 5000;
 
     if (freq != beepFreq || durMs != beepDur || !beepSnd.pcm)
@@ -215,9 +217,9 @@ void VSound::beep(int freq, int durMs)
         if (n <= 0) return;
         i16* pcm = new i16[n];
         if (!pcm) return;
-        /* periodo em amostras, ponto fixo 16.16 */
+        /* the period in samples, 16.16 fixed point */
         const i64 period = ((i64)KOutRate << 16) / freq;
-        const int ramp = KOutRate / 500;           /* 2 ms de rampa p/ nao estalar */
+        const int ramp = KOutRate / 500;           /* a 2 ms ramp so it does not click */
         for (int i = 0; i < n; i++)
         {
             const i64 ph = (((i64)i << 16) % period);

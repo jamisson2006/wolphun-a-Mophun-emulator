@@ -1,12 +1,12 @@
-/* WolphunApp.cpp - Application + Document + ponto de entrada.
- * As tres pecas sao pequenas; ficam juntas para manter a arvore enxuta.
+/* WolphunApp.cpp - Application + Document + the entry point.
+ * All three pieces are small, so they live together to keep the tree lean.
  */
 #include <eikstart.h>
 #include <aknapp.h>
 #include <akndoc.h>
 #include "WolphunAppUi.h"
 
-const TUid KUidWolphunApp = { 0xA0000180 };   /* faixa auto-assinavel */
+const TUid KUidWolphunApp = { 0xA0000180 };   /* the self-signable range */
 
 /* ---------------- Document ---------------- */
 class CWolphunDocument : public CAknDocument
@@ -41,7 +41,7 @@ CApaDocument* CWolphunApplication::CreateDocumentL()
     return CWolphunDocument::NewL(*this);
 }
 
-/* ---------------- entrada ---------------- */
+/* ---------------- entry point ---------------- */
 LOCAL_C CApaApplication* NewApplication(){ return new CWolphunApplication; }
 
 GLDEF_C TInt E32Main(){ return EikStart::RunApplication(NewApplication); }
