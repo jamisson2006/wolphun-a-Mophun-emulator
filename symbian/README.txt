@@ -29,9 +29,13 @@ INSTALL
        E:\Mophun\             (memory card)
    You are NOT limited to those - see "Managing folders" below.
 
-   IMPORTANT: ROMs must be DECRYPTED. "Packed" (compressed) S60/PPC ROMs do
-   not work either - use the "_decompressed" version. The emulator tells you
-   clearly if a ROM cannot be used.
+   DRM-protected ROMs are decrypted on the phone, automatically, when you
+   open them - no PC step needed. (If no Sony Ericsson key matches the file,
+   the emulator says so instead of showing a black screen.)
+
+   "Packed" (compressed) S60/PPC ROMs are the one format that does not work:
+   use the "_decompressed" version. The emulator tells you clearly which of
+   the two problems it hit.
 
 USING IT
 --------
@@ -158,7 +162,6 @@ NOT THERE YET
     one.
   * PCM sound module (vSound*): implemented, but no game in the archive uses
     it.
-  * Encrypted ROMs: they must be decrypted on a PC first.
   * Save states (a VM snapshot): only the game's own native save works.
   * 3D games that keep their assets in an internal ZIP (The Da Vinci Code,
     for example).

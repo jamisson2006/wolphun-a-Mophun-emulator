@@ -158,7 +158,8 @@ They are self-signed, so the phone may ask you to allow software from untrusted 
 Put your `.mpn` files anywhere and register the folder in *Options → Game folders*.
 
 To build it yourself you need the S60 3rd Edition SDK; the whole procedure, including the
-traps, is written up in [`symbian/README.txt`](symbian/README.txt):
+traps, is written up in [`symbian/README.txt`](symbian/README.txt), and the design
+notes are in [`symbian/PLAN.md`](symbian/PLAN.md):
 ```bat
 cd symbian\group
 build.cmd fp1          REM Symbian 9.2+     (build.cmd 3rd for 9.1)
