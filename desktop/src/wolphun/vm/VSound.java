@@ -115,6 +115,49 @@ public final class VSound {
         }
     }
 
+    // ---------------- vBeep: tom simples ----------------
+    // vBeep(freq, duracao_ms) toca UM tom (vmgp.h "Play a tone"). Estava implementado como no-op, e ha
+    // jogos cujo audio e SO isso: o Mooktown Tennis (BUG-091, "no audio") chama vBeep 987 vezes em 15M
+    // instrucoes e nao usa nenhuma outra API de som; o Alpine Ski (BUG-024) tambem beepa.
+    // Sintetizamos uma onda QUADRADA (o timbre de buzzer do aparelho) e tocamos pelo mixer que ja existe,
+    // reaproveitando volume mestre e mistura. Usamos UM handle reservado p/ o beep: com centenas de
+    // chamadas por segundo, criar uma voz por chamada empilharia vozes e estouraria o mix.
+    static final int BEEP_HANDLE = -999;
+    private final Map<Long,Snd> beepCache = new HashMap<Long,Snd>();
+    public void beep(int freq, int durMs){
+        if(!enabled) return;
+        if(line==null && init()!=0) return;                      // jogos beepam sem chamar vSoundInit
+        if(freq<=0 || durMs<=0) return;
+        if(freq>OUT_RATE/2) freq = OUT_RATE/2;                   // acima de Nyquist so gera alias
+        if(durMs>5000) durMs = 5000;
+        Long key = (long)freq<<32 | (durMs & 0xffffffffL);
+        Snd s = beepCache.get(key);
+        if(s==null){
+            int n = (int)((long)OUT_RATE * durMs / 1000);
+            if(n<=0) return;
+            short[] pcm = new short[n];
+            double period = (double)OUT_RATE / freq;             // amostras por ciclo
+            for(int i=0;i<n;i++){
+                double ph = (i % period) / period;
+                short v = (short)(ph < 0.5 ? 9000 : -9000);      // quadrada, amplitude moderada
+                // rampa de 2ms nas pontas p/ nao estalar
+                int ramp = OUT_RATE/500;
+                if(ramp>0){
+                    if(i < ramp)        v = (short)(v * i / ramp);
+                    else if(i > n-ramp) v = (short)(v * (n-i) / ramp);
+                }
+                pcm[i]=v;
+            }
+            s = new Snd(); s.pcm=pcm; s.freq=OUT_RATE; s.loopStart=0; s.loopEnd=0;
+            if(beepCache.size()<64) beepCache.put(key, s);
+        }
+        synchronized(voices){
+            Voice v = voices.get(BEEP_HANDLE);
+            if(v==null){ v = new Voice(); voices.put(BEEP_HANDLE, v); }
+            v.snd=s; v.pos=0; v.step=1.0; v.loop=0; v.vol=1f; v.pan=0f; v.playing=true;
+        }
+    }
+
     // ---------------- mixer ----------------
     void mixLoop(){
         final int FR = 512;                                      // frames por lote
@@ -147,8 +190,17 @@ public final class VSound {
                         if(v.loop!=0){ if(v.loop>0) v.loop--; v.pos = s.loopStart + (v.pos - s.loopEnd); if(v.pos<s.loopStart||v.pos>=s.loopEnd) v.pos=s.loopStart; }
                         else { v.playing=false; break; }
                     }
+                    // reamostragem com INTERPOLACAO LINEAR: sons de 8/11kHz tocam num output de 22/44kHz
+                    // (step<1 -> upsampling); nearest-neighbor (zero-order hold) gera aliasing/"chiado
+                    // distorcido" audivel (pior no 44100 do Android, ex.: jingle de fim de fase do Joe's
+                    // Treasure Quest). A interpolacao linear suaviza o degrau -> corta ~50% da energia de alias.
                     int ip = (int)v.pos;
-                    short sm = (ip>=0 && ip<p.length) ? p[ip] : 0;
+                    float sm;
+                    if(ip>=0 && ip<p.length){
+                        int i1 = ip+1;
+                        short s1 = (i1<s.loopEnd && i1<p.length) ? p[i1] : (v.loop!=0 ? p[s.loopStart] : p[ip]);
+                        sm = p[ip] + (s1 - p[ip]) * (float)(v.pos - ip);
+                    } else sm = 0;
                     mixL[i] += (int)(sm*gl);
                     mixR[i] += (int)(sm*gr);
                     v.pos += v.step;

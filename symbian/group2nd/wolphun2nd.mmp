@@ -1,0 +1,106 @@
+// wolphun2nd.mmp - alvo SYMBIAN 8.1 / S60 2nd Edition FP3 (EKA1).
+// Linha N antiga: N70, N72, N90. Para 9.x use group\wolphun.mmp.
+//
+// Fica num diretorio separado de proposito: o bld.inf do group\ declara GCCE, e abld
+// construiria OS DOIS .mmp em qualquer plataforma pedida -- o wolphun.mmp falharia no
+// ARMI (nao existe eikstart.h no SDK 8.1) e este falharia no GCCE.
+
+// No EKA1 um aplicativo NAO e um executavel: e uma DLL POLIMORFICA com extensao .app,
+// que o AppArc carrega e cujo ordinal 1 (NewApplication) ele chama. Ver WolphunApp2nd.cpp.
+TARGET            wolphun.app
+TARGETTYPE        app
+UID               0x100039CE 0xA0000180
+TARGETPATH        \system\apps\wolphun
+
+// Sem CAPABILITY: a plataforma segura so comeca no 9.1. Aqui a palavra nem existe.
+// Sem MACRO __SYMBIAN_9__: e ESSA ausencia que faz o codigo escolher <e32svr.h> em vez
+// de <e32debug.h> (RDebug) e o caminho de TLS em vez do estatico (WolphunWsd.cpp).
+
+// EPOCSTACKSIZE/EPOCHEAPSIZE nao entram: no EKA1 o app nao tem processo proprio, ele roda
+// dentro do apprun.exe e herda a pilha e o heap DELE. ATENCAO: e um risco real para este
+// emulador, porque a VM pede varios MB de heap e o maximo do heap do apprun nao da para
+// aumentar daqui. Se faltar memoria em jogo grande, a saida e trocar as alocacoes grandes
+// da VM por um User::ChunkHeap proprio, que nao esta sujeito a esse limite.
+
+SOURCEPATH        ..\src
+// a UNICA diferenca de codigo entre os dois alvos: o bootstrap.
+SOURCE            WolphunApp2nd.cpp
+SOURCE            WolphunAppUi.cpp
+SOURCE            WolphunAppView.cpp
+SOURCE            WolphunConfig.cpp
+SOURCE            WolphunEngine.cpp
+SOURCE            WolphunAudio.cpp
+SOURCE            WolphunLang.cpp
+SOURCE            WolphunWsd.cpp
+SOURCE            WolphunVibra.cpp
+
+// nucleo portavel da VM (sem Symbian, sem STL, sem libc) -- identico ao do 9.x
+SOURCEPATH        ..\src\vm
+SOURCE            Vmgp.cpp
+SOURCE            MophunCrypt.cpp
+SOURCE            Pip2.cpp
+SOURCE            Screen.cpp
+SOURCE            VSound.cpp
+SOURCE            Sdk.cpp
+SOURCE            SdkDraw.cpp
+SOURCE            SdkIO.cpp
+SOURCE            SdkApi.cpp
+SOURCE            Renderer3D.cpp
+SOURCE            Renderer3DRaster.cpp
+
+ALWAYS_BUILD_AS_ARM
+
+// O compilador do ARMI e o arm-epoc-pe-gcc 2.9 que vem no SDK -- MUITO mais velho que o
+// GCCE do 9.x, e varias opcoes do wolphun.mmp nao existem nele:
+//   -fwrapv          (so a partir do gcc 3.3)  o interpretador CONTA com o overflow de
+//                    inteiro com sinal dando a volta. Sem a opcao isso e tecnicamente
+//                    comportamento indefinido, mas o gcc 2.9 nao faz as otimizacoes que
+//                    exploram UB de overflow, entao na pratica se comporta igual. Se
+//                    algum jogo divergir do alvo 9.x, suspeite daqui PRIMEIRO.
+//   -funit-at-a-time (so a partir do gcc 3.4)  o 2.9 nunca teve esse modo, entao tambem
+//                    nao ha -fno-unit-at-a-time do SDK para desfazer.
+OPTION GCC        -O3 -fsigned-char -fno-strict-aliasing -fomit-frame-pointer
+
+USERINCLUDE       ..\inc
+SYSTEMINCLUDE     \epoc32\include
+
+SOURCEPATH        ..\data
+// sintaxe VELHA de recurso (o START RESOURCE...END e do 9.x). O destino e o TARGETPATH
+// acima, \system\apps\wolphun, e nao \resource\apps.
+RESOURCE          wolphun.rss
+// o _caption.rss faz o papel do wolphun_loc.rss do 9.x; o wolphun_reg.rss NAO entra,
+// porque no 8.1 quem registra o app no menu e o .aif declarado no fim deste arquivo.
+RESOURCE          wolphun_caption.rss
+
+LANG SC
+
+LIBRARY           euser.lib
+LIBRARY           apparc.lib
+LIBRARY           cone.lib
+LIBRARY           eikcore.lib
+LIBRARY           eikcoctl.lib
+LIBRARY           eikdlg.lib
+LIBRARY           avkon.lib
+LIBRARY           commonengine.lib
+LIBRARY           efsrv.lib
+LIBRARY           estor.lib
+LIBRARY           bafl.lib
+LIBRARY           fbscli.lib
+LIBRARY           gdi.lib
+LIBRARY           ws32.lib
+LIBRARY           aknskins.lib
+LIBRARY           aknskinsrv.lib
+LIBRARY           aknicon.lib
+LIBRARY           hal.lib
+// vibracao do aparelho (nenhuma capability exigida)
+LIBRARY           vibractrl.lib
+LIBRARY           commondialogs.lib
+LIBRARY           platformenv.lib
+LIBRARY           mediaclientaudiostream.lib
+LIBRARY           mediaclientaudio.lib
+
+// Registro no menu do aparelho (equivale ao wolphun_reg.rss do 9.x) E o icone.
+// No 8.1 o icone nao e um .mbm separado: os bitmaps entram DENTRO do .aif, nos dois
+// tamanhos que o Series 60 2nd Edition usa (contexto e lista), com mascara de 1 bit
+// -- aquela geracao nao tem mascara suave. c8 = 256 cores, o maximo util num N70.
+AIF               wolphun.aif ..\aif wolphunaif.rss c8 ..\gfx\wolphun_cxt.bmp ..\gfx\wolphun_cxt_mask.bmp ..\gfx\wolphun_lst.bmp ..\gfx\wolphun_lst_mask.bmp

@@ -1,9 +1,12 @@
 @echo off
-REM Compila o port JavaSE (Java 8). Requer javac no PATH.
+REM Builds the Java SE front-end (Java 8). Requires javac on PATH.
 if not exist out mkdir out
 dir /s /b src\*.java > sources.txt
 javac -encoding UTF-8 -d out @sources.txt
+set ERR=%errorlevel%
 del sources.txt
-REM copia o logo do app para o classpath (icone da janela)
+if not "%ERR%"=="0" (echo COMPILE ERROR & exit /b %ERR%)
+REM copy the app logo and the Ko-fi QR into the classpath (window icon / About dialog)
 if exist assets\wolphun.png copy /y assets\wolphun.png out\wolphun.png >nul
-if %errorlevel%==0 (echo Build OK -^> out\) else (echo ERRO de compilacao)
+if exist assets\kofi-qr.png copy /y assets\kofi-qr.png out\kofi-qr.png >nul
+echo Build OK -^> out\

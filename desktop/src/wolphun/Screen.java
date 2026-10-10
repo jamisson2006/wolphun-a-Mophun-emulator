@@ -149,9 +149,9 @@ public final class Screen {
     // teclas do KEYPAD NUMERICO literais (ASCII '0'..'9','*','#'), lidas por vTestKey/vScanKeys.
     // Alguns jogos (ex.: Bomb Jack) NAO tratam os numeros como d-pad — usam teclas numericas proprias
     // p/ mover (config de controles). Sem isto, vTestKey('3') exigia a diagonal up+right = injogavel.
-    public final boolean[] keypadDown = new boolean[128];
-    public void setKeypad(int ascii, boolean down){ if(ascii>=0 && ascii<128) keypadDown[ascii]=down; }
-    public boolean keypadPressed(int ascii){ return ascii>=0 && ascii<128 && keypadDown[ascii]; }
+    public final boolean[] keypadDown = new boolean[256];   // 0..127 ASCII + 200..217 teclas do aparelho
+    public void setKeypad(int ascii, boolean down){ if(ascii>=0 && ascii<256) keypadDown[ascii]=down; }
+    public boolean keypadPressed(int ascii){ return ascii>=0 && ascii<256 && keypadDown[ascii]; }
     // KeyEvent.VK_* -> ASCII do keypad (0-9 topo/numerico, * e #). -1 se nao for tecla de keypad.
     static int keypadAscii(int code){
         if(code>=KeyEvent.VK_0 && code<=KeyEvent.VK_9) return code;                 // VK_0..9 == '0'..'9'
@@ -187,8 +187,15 @@ public final class Screen {
 
     // ---- escrita/leitura 2D em coords LOGICAS, expandindo p/ o framebuffer FISICO (bloco rs x rs) ----
     /** escreve um pixel logico (com clip); em rs>1 preenche o bloco rs x rs correspondente. */
+    // DEBUG (env HOLEMAP=1): mascara de pixels escritos no frame — acha areas que NAO sao redesenhadas
+    // (o jogo nao limpa a tela 3D, entao buraco = frame anterior vazando = "smearing"). null = desligado.
+    public boolean[] touched;
+    public long pixels2d=0;   // DEBUG: conta pixels escritos pelo caminho 2D
+    public final void mark(int i){ if(touched!=null && i>=0 && i<touched.length) touched[i]=true; }
     public void put(int lx,int ly,int argb){
         if(lx<clipX0||lx>=clipX1||ly<clipY0||ly>=clipY1) return;
+        if(touched!=null) mark((ly*rs)*pw+(lx*rs));
+        pixels2d++;
         if(rs==1){ fb[ly*pw+lx]=argb; return; }
         int bx=lx*rs, by=ly*rs;
         for(int oy=0;oy<rs;oy++){ int row=(by+oy)*pw+bx; for(int ox=0;ox<rs;ox++) fb[row+ox]=argb; }
@@ -211,16 +218,82 @@ public final class Screen {
     public void setButtonBit(int bit, boolean down){ if(down) buttons|=bit; else buttons&=~bit; }
     public void clearButtons(){ buttons=0; }
     public boolean autoAdvance=false; public int flips=0; private long gbTick=0;
+    private final long rtStart=System.currentTimeMillis();   // base p/ autoplay em tempo real (AUTORT)
+    // KEYS="flip:bits[:dur],flip:bits[:dur],..." -- roteiro DETERMINISTICO de teclas por numero de flip.
+    // Os autoplays existentes (AUTOFIRE/AUTORT) pulsam FIRE em loop e por isso andam sozinhos pelos menus:
+    // no Diamond Hunter isso chegava em "EXIT" e o jogo se encerrava (vTerminateVMGP). Com KEYS da p/ dizer
+    // exatamente "no flip 12 aperte FIRE por 3 flips". Bits: UP=1 DOWN=2 LEFT=4 RIGHT=8 FIRE=0x10 SELECT=0x20.
+    private int[][] keyScript;   // {flipInicial, bits, duracao}
+    private int[][] keyScript(){
+        if(keyScript!=null) return keyScript;
+        String e=System.getenv("KEYS");
+        java.util.List<int[]> l=new java.util.ArrayList<int[]>();
+        if(e!=null) for(String part: e.trim().split(",")){
+            String[] t=part.trim().split(":");
+            try {
+                // "every:N:bits[:dur]" = pulso PERIODICO a cada N flips (periodo>0 marca essa forma).
+                // Jogos que esperam tecla numa tela de abertura longa (Fifa 2003 passa de 800 mil flips)
+                // nunca veem um roteiro fixo nos primeiros quadros.
+                if(t[0].trim().equalsIgnoreCase("every"))
+                    l.add(new int[]{ 0, Integer.decode(t[2].trim()),
+                                     t.length>3? Integer.decode(t[3].trim()) : 3, Integer.decode(t[1].trim()) });
+                else
+                    l.add(new int[]{ Integer.decode(t[0].trim()), Integer.decode(t[1].trim()),
+                                     t.length>2? Integer.decode(t[2].trim()) : 3, 0 });
+            } catch(Exception x){}
+        }
+        keyScript=l.toArray(new int[0][]);
+        return keyScript;
+    }
+    // KEYPAD="flip:codigo[:dur],..." -- irmao do KEYS para as teclas que NAO sao bit de botao:
+    // digitos do keypad e as teclas do aparelho (203=voltar, 204=apagar). Sem isto nao da p/ testar
+    // essas teclas em modo headless, porque elas so existem no estado keypadDown.
+    private int[][] padScript;
+    private int[][] padScript(){
+        if(padScript!=null) return padScript;
+        String e=System.getenv("KEYPAD");
+        java.util.List<int[]> l=new java.util.ArrayList<int[]>();
+        if(e!=null) for(String part: e.trim().split(",")){
+            String[] t=part.trim().split(":");
+            try { l.add(new int[]{ Integer.decode(t[0].trim()), Integer.decode(t[1].trim()),
+                                   t.length>2? Integer.decode(t[2].trim()) : 3 }); } catch(Exception x){}
+        }
+        padScript=l.toArray(new int[0][]);
+        return padScript;
+    }
+    private void applyPadScript(){
+        for(int[] k : padScript())
+            setKeypad(k[1], flips>=k[0] && flips<k[0]+k[2]);
+    }
+
     public int getButtons(){
+        applyPadScript();
         int b = buttons;
+        for(int[] k : keyScript()){
+            if(k[3]>0){ if((flips % k[3]) < k[2]) b|=k[1]; }        // periodico
+            else if(flips>=k[0] && flips<k[0]+k[2]) b|=k[1];        // instante fixo
+        }
         // headless: 1 pulso de FIRE (~flip 15) p/ selecionar "New game" e entrar no jogo,
         // depois DIREITA p/ andar/rolar o nivel e mostrar gameplay.
         if(autoAdvance){
             gbTick++;
+            // AUTORT: autoplay por TEMPO REAL (gera bordas de tecla mesmo quando flips congela,
+            // ex.: no wait-loop "Get ready" que nao chama vFlipScreen). Passa menus + joga.
+            if(System.getenv("AUTORT")!=null){
+                long t=System.currentTimeMillis()-rtStart; long ph=(t/120)%20;
+                if(ph==0||ph==5) b|=FIRE;                      // pulso de FIRE (bordas) p/ menus/get-ready
+                else if(t>5000){ b|=RIGHT; if(ph==8||ph==9) b|=UP; if(ph==13) b|=FIRE; }  // depois: joga
+                return b;
+            }
             // entra no jogo (FIRE), depois JOGA: anda p/ direita, pula e atira periodicamente
             // (p/ progredir/morrer e disparar saves de highscore/resume durante testes)
             boolean die = System.getenv("AUTODIE")!=null;
             if(System.getenv("AUTOFIRE")!=null){ if((flips%25)>=10 && (flips%25)<13) b|=FIRE; }   // pulsa FIRE p/ clicar menus
+            // PRESSKEY=0xNN: pulsa um bit de tecla arbitrario (teste de alternar camera, pausa, etc.)
+            if(System.getenv("PRESSKEY")!=null){
+                int bit=Integer.decode(System.getenv("PRESSKEY").trim());
+                if((flips%40)>=20 && (flips%40)<23) b|=bit;
+            }
             else if(flips>=8 && flips<11) b|=FIRE;             // entra no jogo
             else if(die){
                 // modo "morrer": anda p/ direita sem pular -> cai em buraco -> game over
@@ -282,7 +355,18 @@ public final class Screen {
         if((flags&2)!=0) style |= Font.BOLD;
         if((flags&1)!=0) style |= Font.ITALIC;
         String family = (flags&8)!=0 ? Font.MONOSPACED : Font.SANS_SERIF;                 // MONOSPACE alinha texto
-        sysFont = new Font(family, style, px);
+        // 'px' e a ALTURA da fonte em pixels (vmgp.h: FONT_SIZE_PIXELS(n) = "font height in pixels"),
+        // mas o construtor da AWT recebe o EM SIZE -- e fm.getHeight() (ascent+descent+leading) sai bem
+        // maior que o em size. Passar px direto inflava a altura de linha ~30%: o vTextExtent devolvia
+        // altura demais e os jogos que MONTAM O LAYOUT com ele estouravam (Erix perdia o item "Quit" do
+        // menu fora da tela e o painel branco crescia). Procuramos o maior em size cujo getHeight() ainda
+        // cabe na altura pedida.
+        int em = px;
+        for(; em > 4; em--){
+            Font f = new Font(family, style, em);
+            if(fontG.getFontMetrics(f).getHeight() <= px) break;
+        }
+        sysFont = new Font(family, style, em);
         fontG.setFont(sysFont);
         fm = fontG.getFontMetrics();
     }
@@ -361,9 +445,13 @@ public final class Screen {
     }
 
     public String flipSnapPrefix=null; private int flipNum=0;
+    // quantos frames capturar (e de quantos em quantos): FLIPSNAPMAX / FLIPSNAPEVERY.
+    // O default 200 so pegava o splash de jogos com abertura longa (Golf Pro Contest).
+    public static final int FLIPSNAPMAX   = System.getenv("FLIPSNAPMAX")!=null?   Integer.parseInt(System.getenv("FLIPSNAPMAX").trim())   : 200;
+    public static final int FLIPSNAPEVERY = System.getenv("FLIPSNAPEVERY")!=null? Integer.parseInt(System.getenv("FLIPSNAPEVERY").trim()) : 1;
     public void present(){
         flips++;
-        if(flipSnapPrefix!=null && ++flipNum<=200) savePng(flipSnapPrefix+String.format("%02d",flipNum)+".png");
+        if(flipSnapPrefix!=null && ++flipNum<=FLIPSNAPMAX*FLIPSNAPEVERY && (flipNum%FLIPSNAPEVERY)==0) savePng(flipSnapPrefix+String.format("%05d",flipNum)+".png");
         if(headless) return;
         // frame pacing: vFlipScreen "bloqueia" ate completar 1/targetFps (evita FPS exagerado/crash)
         if(targetFps>0){
@@ -378,14 +466,90 @@ public final class Screen {
             }
             lastFrameNanos = System.nanoTime();
         }
-        if(gamma==1.0){ System.arraycopy(fb, 0, imgPixels, 0, fb.length); }
-        else { ensureGammaLut(); for(int i=0;i<fb.length;i++) imgPixels[i]=applyGamma(fb[i]); }
+        synchronized(imgLock){ syncImg(); }
         Graphics g=canvas.getGraphics();
         if(g!=null){ render(g); g.dispose(); }
     }
+
+    // fb (ARGB cru, com gamma aplicado na saida) -> img, a imagem que vai para a tela.
+    // Chamado pela thread da VM em present() e pela thread da UI na captura de tela, dai o lock.
+    private final Object imgLock = new Object();
+    private void syncImg(){
+        if(gamma==1.0){ System.arraycopy(fb, 0, imgPixels, 0, fb.length); }
+        else { ensureGammaLut(); for(int i=0;i<fb.length;i++) imgPixels[i]=applyGamma(fb[i]); }
+    }
+
+    /**
+     * CAPTURA DE TELA na resolucao da JANELA (o tamanho do canvas em pixels), nao na do jogo.
+     * E o mesmo desenho que esta na tela: mesma proporcao, mesmo filtro (vizinho mais proximo
+     * num multiplo exato, bilinear fora disso). Um 176x208 numa janela maximizada sai, por
+     * exemplo, em 1382x736 -- o savePng() continua existindo para o tamanho do framebuffer.
+     *
+     * @param comBarras true = o canvas inteiro, com as barras pretas do letterbox;
+     *                  false = so a area do jogo, recortada.
+     * @return a imagem, ou null se ainda nao houve nenhum quadro.
+     */
+    public BufferedImage capture(boolean comBarras){
+        if(headless || canvas==null || flips<=0) return null;
+        int cw = canvas.getWidth(), ch = canvas.getHeight();
+        if(cw<=0 || ch<=0){ cw = w*scale; ch = h*scale; }
+        int[] d = fitRect(cw, ch);                      // dx,dy,dw,dh -- identico ao da tela
+        int ow = comBarras ? cw : d[2], oh = comBarras ? ch : d[3];
+        if(ow<1 || oh<1) return null;
+        BufferedImage out = new BufferedImage(ow, oh, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = out.createGraphics();
+        try {
+            synchronized(imgLock){
+                syncImg();                              // pega o quadro mais recente
+                if(comBarras) render(g, cw, ch);        // inclui as barras pretas
+                else {
+                    setFilter(g, d[2], d[3]);
+                    g.drawImage(img, 0, 0, ow, oh, null);
+                }
+            }
+        } finally { g.dispose(); }
+        return out;
+    }
+    // Desenha o quadro no tamanho ATUAL do canvas (a janela do jogo e redimensionavel /
+    // maximizavel). Preserva a proporcao do aparelho: o excedente vira barra preta, senao
+    // um 176x208 esticado numa tela 16:9 ficaria achatado.
     private void render(Graphics g){
-        if(rs>1 && g instanceof Graphics2D)   // downscale do buffer HD -> saida: bilinear = anti-aliasing
-            ((Graphics2D)g).setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
-        g.drawImage(img,0,0,w*scale,h*scale,null);
+        int cw = canvas!=null ? canvas.getWidth()  : 0;
+        int ch = canvas!=null ? canvas.getHeight() : 0;
+        if(cw<=0 || ch<=0){ cw = w*scale; ch = h*scale; }      // antes do primeiro layout
+        render(g, cw, ch);
+    }
+
+    // o mesmo desenho, para um alvo de cw x ch (a tela, ou o bitmap da captura).
+    private void render(Graphics g, int cw, int ch){
+        int[] d = fitRect(cw, ch);
+        int dx=d[0], dy=d[1], dw=d[2], dh=d[3];
+        setFilter(g, dw, dh);
+        if(dx>0 || dy>0){                                      // barras pretas (letterbox)
+            g.setColor(Color.BLACK);
+            if(dy>0){ g.fillRect(0,0,cw,dy); g.fillRect(0,dy+dh,cw,ch-dy-dh); }
+            if(dx>0){ g.fillRect(0,dy,dx,dh); g.fillRect(dx+dw,dy,cw-dx-dw,dh); }
+        }
+        g.drawImage(img,dx,dy,dw,dh,null);
+    }
+
+    /** onde o quadro cabe num alvo cw x ch, preservando a proporcao: {dx,dy,dw,dh}. */
+    private int[] fitRect(int cw, int ch){
+        int dw = cw, dh = (int)((long)cw*h/w);                 // encaixa pela largura...
+        if(dh > ch){ dh = ch; dw = (int)((long)ch*w/h); }      // ...ou pela altura
+        if(dw < 1) dw = 1;
+        if(dh < 1) dh = 1;
+        return new int[]{ (cw-dw)/2, (ch-dh)/2, dw, dh };
+    }
+
+    // multiplo exato do framebuffer FISICO -> vizinho mais proximo (pixel cravado, sem borrao).
+    // Fora disso (zoom quebrado, ou downscale do buffer HD) bilinear, senao as linhas saem com
+    // espessura irregular.
+    private void setFilter(Graphics g, int dw, int dh){
+        if(!(g instanceof Graphics2D)) return;
+        boolean exato = dw>=pw && dh>=ph && (dw%pw)==0 && (dh%ph)==0;
+        ((Graphics2D)g).setRenderingHint(RenderingHints.KEY_INTERPOLATION,
+            exato ? RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR
+                  : RenderingHints.VALUE_INTERPOLATION_BILINEAR);
     }
 }

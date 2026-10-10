@@ -1,0 +1,19 @@
+/* wolphun_loc.rss - nome e ICONE do app no menu do aparelho.
+ *
+ * O icone e o wolphun_aif.mbm construido pelo wolphun.mmp a partir do mesmo logo da
+ * versao desktop. E .mbm e nao .mif porque o mifconv deste SDK nao gera SVG-T (falta
+ * o svgtbinencode.exe); para icon_file os dois valem igual.
+ */
+#include <appinfo.rh>
+
+RESOURCE LOCALISABLE_APP_INFO r_wolphun_localisable_app_info
+{
+    short_caption = "wolphun";
+    caption_and_icon =
+    CAPTION_AND_ICON_INFO
+    {
+        caption = "wolphun emu";
+        number_of_icons = 1;
+        icon_file = "\\resource\\apps\\wolphun_aif.mbm";
+    };
+}

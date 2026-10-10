@@ -1,4 +1,4 @@
 @echo off
-REM Inicia o Mophun Emulator (GUI: biblioteca de ROMs, settings, controles, saves).
-REM Compile antes com build.bat (ele ja cobre src\mophun).
+REM Starts the emulator GUI (ROM library, settings, controls, saves).
+REM Build first with build.bat.
 java -cp out mophun.Emulator %*

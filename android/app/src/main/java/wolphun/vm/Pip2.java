@@ -20,6 +20,76 @@ public final class Pip2 {
 
     public final Vmgp exe;
     public Sdk sdk;
+
+    // ================= MULTITAREFA COOPERATIVA (igual ao nofun) =================
+    // Varios jogos criam uma tarefa (vCreateTask) e esperam por ela (vTaskAlive) enquanto a tarefa
+    // roda o trabalho de verdade. Sem escalonador, a tarefa nunca rodava e o jogo ficava em espera
+    // ocupada p/ sempre (Worms World Party: 1,3 milhao de vGetTickCount, tela preta).
+    // Modelo: cada tarefa guarda uma copia dos registradores; a troca acontece em SLEEP (yield),
+    // KILLTASK/retorno-p/-RA-sentinela (fim da tarefa). Fila FIFO, sem preempcao.
+    public static final int TASK_END = 0xFFF0;      // RA das tarefas: chegar aqui = tarefa terminou
+    public static final class Task {
+        public int id; public final int[] ctx = new int[33];
+        public int stackBlock = 0; public int recv = 0;
+    }
+    public final java.util.ArrayList<Task> taskQueue = new java.util.ArrayList<Task>();
+    public final java.util.HashMap<Integer,Task> tasks = new java.util.HashMap<Integer,Task>();
+    public Task currentTask = null;
+    private int nextTaskId = 1;
+
+    public int createTask(int entry, int p0, int p1, int p2, int stackTopAddr, int stackBlock){
+        Task t = new Task();
+        t.id = nextTaskId++; t.stackBlock = stackBlock;
+        t.ctx[PC>>2] = entry;  t.ctx[SP>>2] = stackTopAddr;  t.ctx[RA>>2] = TASK_END;
+        t.ctx[12] = p0; t.ctx[13] = p1; t.ctx[14] = p2;      // P0..P2 = r12..r14
+        tasks.put(t.id, t); taskQueue.add(t);
+        return t.id;
+    }
+    public boolean taskAlive(int id){ return tasks.containsKey(id); }
+    public int thisTaskId(){ return currentTask!=null? currentTask.id : 0; }
+    public void disposeTask(int id){
+        Task t = tasks.remove(id);
+        if(t!=null){ taskQueue.remove(t); if(t.stackBlock!=0 && sdk!=null) sdk.freePtr(t.stackBlock); }
+    }
+    private void saveCurrentTask(){
+        if(currentTask==null) return;
+        System.arraycopy(R, 0, currentTask.ctx, 0, R.length);
+    }
+    private void loadTask(Task t){
+        currentTask = t;
+        System.arraycopy(t.ctx, 0, R, 0, R.length);
+    }
+    /** Passa p/ a proxima tarefa da fila. Fila vazia = nao ha mais nada a executar -> para a VM. */
+    private void runNextTask(){
+        if(taskQueue.isEmpty()){ stopped=true; return; }
+        saveCurrentTask();
+        loadTask(taskQueue.remove(0));
+    }
+    /** SLEEP: devolve a vez. Com uma tarefa so, ela volta imediatamente (no-op, como antes). */
+    public void yieldTask(){
+        if(taskQueue.isEmpty()) return;             // nada p/ alternar
+        if(currentTask==null) currentTask = mainTask();
+        saveCurrentTask();
+        taskQueue.add(currentTask);
+        loadTask(taskQueue.remove(0));
+    }
+    /** Fim da tarefa atual (KILLTASK, ou retorno p/ TASK_END/0). */
+    public void terminateTask(){
+        if(currentTask!=null && currentTask.id!=0){
+            tasks.remove(currentTask.id);
+            if(currentTask.stackBlock!=0 && sdk!=null) sdk.freePtr(currentTask.stackBlock);
+            currentTask = null;
+        }
+        if(taskQueue.isEmpty()){ stopped=true; return; }
+        loadTask(taskQueue.remove(0));
+    }
+    private Task mainTask(){
+        Task t = tasks.get(0);
+        if(t==null){ t = new Task(); t.id = 0; tasks.put(0, t); }
+        return t;
+    }
+
+
     public boolean stopped = false;
     public long instr = 0;
     public long stubCalls = 0;
@@ -164,7 +234,8 @@ public final class Pip2 {
     int prevPc=0; boolean derailReported=false;
     public void step(){
         int pc0 = R[PC>>2];
-        if(pc0==0){ stopped=true; return; }   // ret p/ RA=0 = fim de task (KILLTASK), termino limpo
+        if(pc0==TASK_END){ terminateTask(); return; }   // tarefa retornou p/ a sentinela
+        if(pc0==0){ if(!taskQueue.isEmpty()){ terminateTask(); return; } stopped=true; return; }   // fim de task
         if(!derailReported && (pc0 < codeBase || pc0 >= codeBase+exe.codeSize)){
             derailReported=true;
             System.err.printf("AVISO: PC fora do codigo @instr %d: prevPC=0x%x -> PC=0x%x (off 0x%x)  RA=0x%x SP=0x%x%n",
@@ -248,8 +319,8 @@ public final class Pip2 {
             case 0x43: store(d,s); break;                          // STORE (d=start,s=count)
             case 0x44: restore(d,s); break;                        // RESTORE
             case 0x45: restore(d,s); R[PC>>2]=r32(RA); break;      // RET
-            case 0x46: stopped=true; break;                        // KILLTASK
-            case 0x47: /*SLEEP*/ break;                            // SLEEP
+            case 0x46: terminateTask(); break;                     // KILLTASK: encerra a TAREFA
+            case 0x47: yieldTask(); break;                         // SLEEP: cede a vez
             case 0x48: memcpy(r32(d), r32(s), r32(t)); break;      // SYSCPY
             case 0x49: memset(r32(d), r8(s), r32(t)); break;       // SYSSET
             case 0x4A: w32(d, r32(s)+(int)fetchImm()); break;      // ADDi

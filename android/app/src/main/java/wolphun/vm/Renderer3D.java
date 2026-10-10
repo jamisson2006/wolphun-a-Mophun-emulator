@@ -30,7 +30,14 @@ public final class Renderer3D {
     boolean transp3d = false;            // TransparentEnable (state 15): indice 0 da textura = transparente
     // --- render states VMGP3D honrados (defaults escolhidos p/ = comportamento anterior; sem regressao) ---
     int shadeMode = 2;                   // state 7:  1=FLAT, 2=GOURAUD (default)
-    int texBlendMode = 1;                // state 11: 1=DECAL/REPLACE (default), 2=MODULATE, 4=ADD
+    // state 11: 1=DECAL/REPLACE, 2=MODULATE, 4=ADD. DEFAULT = MODULATE.
+    // Prova: os tutoriais Light3D e Earth3D do SDK ligam TEXTUREENABLE + LIGHTINGENABLE +
+    // SHADE_GOURAUD e NUNCA chamam vSetRenderState(TEXTURE_BLENDMODE). Se o default fosse DECAL
+    // ("Will ignore fragment colors and use the texels without shading", vmgp3d.h:186), os dois
+    // tutoriais de ILUMINACAO sairiam sem iluminacao -- nao demonstrariam nada. Com DECAL por
+    // default descartavamos a cor de vertice (o sombreado JA ASSADO pelo jogo) de todo jogo que
+    // nao seta o estado 11 -> cenario/carro saiam "crus"/chapados.
+    int texBlendMode = 2;
     int colorBlend = 0;                  // state 20: 0=REPLACE (opaco, default),1=ALPHAADD,2=ALPHA,3=MODULATE
     boolean alphaEnable = false;         // state 12: habilita blending pelo alpha difuso do vertice
     int wrapMode = 1;                    // state 14: 1=WRAP (default), 2=CLAMP, 4=MIRROR
@@ -42,6 +49,12 @@ public final class Renderer3D {
     float fogStart = 0f, fogEnd = 1f, fogDensity = 0f;  // states 23,24,25 (fixed->float)
     boolean lightingEnable = false;      // state 17
     boolean specularEnable = false;      // state 16
+    int filterMode = 1;                  // state 13: 1=NEAREST, 2=LINEAR, 4/8/16/32=mip*
+    // NAO entra no save state: acrescentar campo quebraria os MPV5/MPV6 ja salvos.
+    // 0=segue o jogo (state 13); 1=forca LINEAR; 2=forca NEAREST. Exposto nas Configuracoes.
+    public int texFilterForce = 0;
+    static final boolean LIGHTMAT_OFF = System.getenv("NOLIGHTMAT")!=null;
+    static final boolean SPEC_OFF     = System.getenv("NOSPEC")!=null;
 
     // --- iluminacao T&L (VMGP3D). So aplicada quando LIGHTINGENABLE (state 17); default off -> sem efeito. ---
     static final int MAXL = 8;
@@ -367,6 +380,7 @@ public final class Renderer3D {
             case 9:  textureMode=(value!=0); break;    // TEXTUREENABLE
             case 11: texBlendMode=value; break;        // TEXTURE_BLENDMODE (decal/modulate/add)
             case 12: alphaEnable=(value!=0); break;    // ALPHAENABLE
+            case 13: filterMode=value; break;          // FILTERMODE (nearest/linear/mip*)
             case 14: wrapMode=value; break;            // WRAPMODE (wrap/clamp/mirror)
             case 15: transp3d=(value!=0); break;       // TRANSPARENTENABLE (indice 0 transparente)
             case 16: specularEnable=(value!=0); break; // SPECULARENABLE
@@ -408,6 +422,113 @@ public final class Renderer3D {
             default: return ((c%size)+size)%size;                                  // WRAP
         }
     }
+    // ---- save state: o estado do pipeline 3D (matrizes/viewport/render states) e setado pelo jogo UMA VEZ
+    // no init do nivel, NAO a cada frame. Sem serializa-lo, apos um loadState a projecao voltava a IDENTIDADE
+    // -> os vertices em espaco de MUNDO (ex.: o ceu do Joe's Treasure Quest, z~90) projetavam p/ fora da tela
+    // (y~880 num viewport de 208) -> 0 pixels -> "ceu sumido"/cena quebrada ao carregar um save 3D.
+    public void saveState3D(java.io.DataOutputStream o) throws java.io.IOException {
+        for(float v: current) o.writeFloat(v);
+        for(float v: projection) o.writeFloat(v);
+        for(float v: light) o.writeFloat(v);
+        o.writeInt(matrixOrientation);
+        o.writeInt(vpL); o.writeInt(vpT); o.writeInt(vpW); o.writeInt(vpH);
+        o.writeInt(cullMode); o.writeBoolean(textureMode); o.writeBoolean(transp3d);
+        o.writeInt(shadeMode); o.writeInt(texBlendMode); o.writeInt(colorBlend);
+        o.writeBoolean(alphaEnable); o.writeInt(wrapMode);
+        o.writeBoolean(zEnable); o.writeInt(zFunc);
+        o.writeBoolean(fogEnable); o.writeInt(fogMode); o.writeInt(fogColor);
+        o.writeFloat(fogStart); o.writeFloat(fogEnd); o.writeFloat(fogDensity);
+        o.writeBoolean(lightingEnable); o.writeBoolean(specularEnable);
+        o.writeInt(texturePtr); o.writeInt(textureFormat); o.writeInt(textureW); o.writeInt(textureH);
+    }
+    /** Luzes + ambiente + material. Ficaram FORA do bloco MPV5 original: ao carregar um save state
+     *  mid-jogo todas as luzes configuradas eram perdidas (lights[]=null, ambiente=0, material no
+     *  default), e qualquer primitiva com LIGHTINGENABLE saia sem contribuicao de luz. Gravado como
+     *  MPV6; saves MPV5 antigos continuam carregando (so nao trazem estes campos). */
+    public void saveLights(java.io.DataOutputStream o) throws java.io.IOException {
+        o.writeInt(ambientScene);
+        for(int i=0;i<MAXL;i++){
+            float[] L=lights[i];
+            o.writeBoolean(L!=null);
+            if(L!=null) for(int k=0;k<16;k++) o.writeFloat(L[k]);
+        }
+        o.writeInt(matDiffR); o.writeInt(matDiffG); o.writeInt(matDiffB);
+        o.writeInt(matSpecR); o.writeInt(matSpecG); o.writeInt(matSpecB);
+        o.writeInt(matEmR);   o.writeInt(matEmG);   o.writeInt(matEmB);
+        o.writeInt(matAmbR);  o.writeInt(matAmbG);  o.writeInt(matAmbB);
+        o.writeFloat(matShininess);
+    }
+    public void loadLights(java.io.DataInputStream in) throws java.io.IOException {
+        ambientScene=in.readInt();
+        for(int i=0;i<MAXL;i++){
+            if(in.readBoolean()){ float[] L=new float[16]; for(int k=0;k<16;k++) L[k]=in.readFloat(); lights[i]=L; }
+            else lights[i]=null;
+        }
+        matDiffR=in.readInt(); matDiffG=in.readInt(); matDiffB=in.readInt();
+        matSpecR=in.readInt(); matSpecG=in.readInt(); matSpecB=in.readInt();
+        matEmR=in.readInt();   matEmG=in.readInt();   matEmB=in.readInt();
+        matAmbR=in.readInt();  matAmbG=in.readInt();  matAmbB=in.readInt();
+        matShininess=in.readFloat();
+    }
+    /** Texturas GERENCIADAS (vCreateTexture -> handle) + a paleta embutida da textura ativa.
+     *  Ficaram fora do MPV6: o mapa `managed` vive so na JVM, entao ao carregar um save state num
+     *  processo novo ele vinha VAZIO -> vSetActiveTexture(handle) nao achava nada e SILENCIOSAMENTE
+     *  mantinha a textura anterior -> a cena inteira herdava uma unica textura (chao vermelho,
+     *  arvores azuis no Carmageddon). Gravado como MPV7. */
+    public void saveTextures(java.io.DataOutputStream o) throws java.io.IOException {
+        o.writeInt(nextTexHandle);
+        o.writeInt(managed.size());
+        for(java.util.Map.Entry<Integer,Tex> e : managed.entrySet()){
+            Tex t = e.getValue();
+            o.writeInt(e.getKey()); o.writeInt(t.format); o.writeInt(t.w); o.writeInt(t.h); o.writeInt(t.dataPtr);
+            writePal(o, t.palette);
+        }
+        writePal(o, activePalette);
+    }
+    public void loadTextures(java.io.DataInputStream in) throws java.io.IOException {
+        nextTexHandle = in.readInt();
+        int n = in.readInt();
+        managed.clear();
+        for(int i=0;i<n;i++){
+            int h=in.readInt(); Tex t=new Tex();
+            t.format=in.readInt(); t.w=in.readInt(); t.h=in.readInt(); t.dataPtr=in.readInt();
+            t.palette=readPal(in);
+            managed.put(h, t);
+        }
+        activePalette = readPal(in);
+    }
+    static void writePal(java.io.DataOutputStream o, int[] pal) throws java.io.IOException {
+        if(pal==null){ o.writeInt(-1); return; }
+        o.writeInt(pal.length); for(int v: pal) o.writeInt(v);
+    }
+    static int[] readPal(java.io.DataInputStream in) throws java.io.IOException {
+        int n=in.readInt(); if(n<0) return null;
+        int[] pal=new int[n]; for(int i=0;i<n;i++) pal[i]=in.readInt(); return pal;
+    }
+    public void loadState3D(java.io.DataInputStream in) throws java.io.IOException {
+        for(int i=0;i<16;i++) current[i]=in.readFloat();
+        for(int i=0;i<16;i++) projection[i]=in.readFloat();
+        for(int i=0;i<16;i++) light[i]=in.readFloat();
+        matrixOrientation=in.readInt();
+        vpL=in.readInt(); vpT=in.readInt(); vpW=in.readInt(); vpH=in.readInt();
+        // Um save state feito noutra RESOLUCAO traz um viewport que nao cabe nesta tela. O jogo
+        // so chama vSetViewport na inicializacao do 3D, entao ele NUNCA se corrigiria: a sessao
+        // inteira ficaria desenhando numa escala errada. Sintoma no Football Pro Contest: estado
+        // salvo a 176x208 e carregado a 128x160 -> tudo ~1,37x maior e cortado (jogadores
+        // "gigantes esticados", fundo de menu em faixas). Nesse caso volta para a tela inteira,
+        // que e o que o jogo teria pedido nesta resolucao.
+        if(vpW<=0 || vpH<=0 || vpL<0 || vpT<0 || vpL+vpW>scr.w || vpT+vpH>scr.h){
+            vpL=0; vpT=0; vpW=scr.w; vpH=scr.h;
+        }
+        cullMode=in.readInt(); textureMode=in.readBoolean(); transp3d=in.readBoolean();
+        shadeMode=in.readInt(); texBlendMode=in.readInt(); colorBlend=in.readInt();
+        alphaEnable=in.readBoolean(); wrapMode=in.readInt();
+        zEnable=in.readBoolean(); zFunc=in.readInt();
+        fogEnable=in.readBoolean(); fogMode=in.readInt(); fogColor=in.readInt();
+        fogStart=in.readFloat(); fogEnd=in.readFloat(); fogDensity=in.readFloat();
+        lightingEnable=in.readBoolean(); specularEnable=in.readBoolean();
+        texturePtr=in.readInt(); textureFormat=in.readInt(); textureW=in.readInt(); textureH=in.readInt();
+    }
     public void clearDepth(){ ensureZ(); java.util.Arrays.fill(zbuf, Float.MAX_VALUE); }
     // limpa o z-buffer SO se ja foi alocado (3D ativo). Chamado a cada vFlipScreen: o z-buffer do mophun
     // e scratch por-frame, mas jogos como Rally Pro Contest NUNCA chamam vSetZBuffer nem vClearScreen
@@ -448,14 +569,21 @@ public final class Renderer3D {
     public void deleteAllTextures(){ managed.clear(); }
 
     // decodifica a paleta EMBUTIDA (formatos 16-19). null p/ formatos sem paleta propria (usam paleta de tela).
-    // paleta e um array de u32: RGB888 (0x00RRGGBB) p/ 16/17; ARGB8888 p/ 18/19 (bit31 do alpha = transparente no HW,
-    // mas o rasterizador 3D e opaco -> guardamos so o RGB, opaco).
+    // paleta e um array de u32: RGB888 (0x00RRGGBB) p/ 16/17; ARGB8888 p/ 18/19, onde o byte de alpha
+    // LIGADO marca a COR-CHAVE transparente (nao e uma opacidade). Medido no Carmageddon 3D: toda paleta
+    // 18/19 tem exatamente UMA entrada 0xff000000 e todas as outras 0x00RRGGBB -- e essa entrada NAO fica
+    // sempre no indice 0 (nos pedestres esta no indice 1). Como so o indice 0 era tratado como transparente
+    // (TRANSPARENTENABLE), os pedestres distantes saiam como retangulos PRETOS solidos.
     int[] decodeTexPalette(int format, int palPtr, int count){
         boolean self = (format==16||format==17||format==18||format==19);
         if(!self || palPtr==0 || count<=0) return null;
         if(count>256) count=256;
         int[] pal = new int[count];
-        for(int i=0;i<count;i++){ int c=vm.read32(palPtr+i*4); pal[i]=0xff000000|(c&0xffffff); }
+        boolean argb = (format==18||format==19);              // 18/19: alpha da entrada = flag de cor-chave
+        for(int i=0;i<count;i++){
+            int c=vm.read32(palPtr+i*4);
+            pal[i] = (argb && (c&0xff000000)!=0) ? 0 : (0xff000000|(c&0xffffff));   // 0 = transparente
+        }
         return pal;
     }
     // resolve um indice pela paleta ativa da textura (embutida) ou, se nao houver, pela paleta de TELA.
@@ -464,9 +592,39 @@ public final class Renderer3D {
     int read4(int idx){ int b=vm.read8(texturePtr+(idx>>1))&0xff; return ((idx&1)==0)?(b&0x0f):(b>>4); }
 
     // amostra a textura ativa em (u,v) [0..1] com wrap; decodifica pelo formato
+    /** Honra VMGP3D_FILTERMODE(13). O SDK lista TEXFILTER_LINEAR e, diferente de FOGENABLE e
+     *  PERSPECTIVEENABLE, NAO marca o filtro como indisponivel no renderer de software. */
     int texSample(float u,float v){
+        boolean linear = (texFilterForce==1) || (texFilterForce==0 && (filterMode==2 || filterMode==8 || filterMode==32));
+        return linear ? texelBilinear(u,v) : texelNearest(u,v);
+    }
+    int texelNearest(float u,float v){
         int tx=wrapCoord((int)Math.floor(u*textureW), textureW);
         int ty=wrapCoord((int)Math.floor(v*textureH), textureH);
+        return texelAt(tx,ty);
+    }
+    /** Bilinear com transparencia: o texel de referencia decide o descarte e so vizinhos OPACOS
+     *  entram na media (senao bordas de sprite/ceu sangram cor de fora). */
+    int texelBilinear(float u,float v){
+        float fx=u*textureW-0.5f, fy=v*textureH-0.5f;
+        int x0=(int)Math.floor(fx), y0=(int)Math.floor(fy);
+        float ax=fx-x0, ay=fy-y0;
+        int cx=wrapCoord((int)Math.floor(u*textureW), textureW);
+        int cy=wrapCoord((int)Math.floor(v*textureH), textureH);
+        if(texelAt(cx,cy)==0) return 0;
+        int tx0=wrapCoord(x0,textureW), tx1=wrapCoord(x0+1,textureW);
+        int ty0=wrapCoord(y0,textureH), ty1=wrapCoord(y0+1,textureH);
+        int c00=texelAt(tx0,ty0), c10=texelAt(tx1,ty0), c01=texelAt(tx0,ty1), c11=texelAt(tx1,ty1);
+        float w00=(1-ax)*(1-ay), w10=ax*(1-ay), w01=(1-ax)*ay, w11=ax*ay;
+        float wsum=0, r=0, g=0, b=0, al=0;
+        if(c00!=0){ wsum+=w00; r+=((c00>>16)&0xff)*w00; g+=((c00>>8)&0xff)*w00; b+=(c00&0xff)*w00; al+=(c00>>>24)*w00; }
+        if(c10!=0){ wsum+=w10; r+=((c10>>16)&0xff)*w10; g+=((c10>>8)&0xff)*w10; b+=(c10&0xff)*w10; al+=(c10>>>24)*w10; }
+        if(c01!=0){ wsum+=w01; r+=((c01>>16)&0xff)*w01; g+=((c01>>8)&0xff)*w01; b+=(c01&0xff)*w01; al+=(c01>>>24)*w01; }
+        if(c11!=0){ wsum+=w11; r+=((c11>>16)&0xff)*w11; g+=((c11>>8)&0xff)*w11; b+=(c11&0xff)*w11; al+=(c11>>>24)*w11; }
+        if(wsum<=1e-6f) return 0;
+        return (clamp((int)(al/wsum+0.5f))<<24)|(clamp((int)(r/wsum+0.5f))<<16)|(clamp((int)(g/wsum+0.5f))<<8)|clamp((int)(b/wsum+0.5f));
+    }
+    int texelAt(int tx,int ty){
         int idx=ty*textureW+tx;                                                    // indice linear do texel
         // formatos indexados: se transp3d (TransparentEnable) e o indice e 0 -> transparente (retorna alpha 0)
         switch(textureFormat){
@@ -480,10 +638,17 @@ public final class Renderer3D {
             case 11: return 0xff000000|(vm.read32(texturePtr+idx*4)&0xffffff);      // ARGB8888 (RGB direto, opaco)
             case 12: { int w=vm.read16(texturePtr+idx*2)&0xffff;                    // RGB444 (4/4/4)
                        int r=(w>>8)&0xf,g=(w>>4)&0xf,bl=w&0xf; return 0xff000000|((r*17)<<16)|((g*17)<<8)|(bl*17); }
-            case 13: { int w=vm.read16(texturePtr+idx*2)&0xffff;                    // ARGB4444 (bit alto do alpha = transparente)
-                       if((w&0x8000)==0) return 0; int r=(w>>8)&0xf,g=(w>>4)&0xf,bl=w&0xf; return 0xff000000|((r*17)<<16)|((g*17)<<8)|(bl*17); }
-            case 14: { int w=vm.read16(texturePtr+idx*2)&0xffff;                    // ARGB1555 (bit alto = transparente)
-                       if((w&0x8000)==0) return 0; int r=(w>>10)&0x1f,g=(w>>5)&0x1f,bl=w&0x1f;
+            // ARGB4444/ARGB1555: no mophun o campo de alpha e TRANSPARENCIA, nao opacidade -- alpha
+            // LIGADO = texel transparente (mesma convencao das paletas ARGB dos formatos 18/19).
+            // Medido na mao do motorista do Carmageddon 3D (textura 64x64 fmt 13): os 1319 texels com
+            // alpha=0xF tem TODOS rgb=0 (o fundo) e os 2527 com alpha=0 e que carregam a luva. O teste
+            // invertido descartava a mao e pintava o fundo de preto opaco (o "quadrado preto" do menu).
+            case 13: { int w=vm.read16(texturePtr+idx*2)&0xffff;                    // ARGB4444
+                       int a=15-((w>>12)&0xf); if(a<=0) return 0;                   // alpha=0xF -> transparente
+                       int r=(w>>8)&0xf,g=(w>>4)&0xf,bl=w&0xf;
+                       return ((a*17)<<24)|((r*17)<<16)|((g*17)<<8)|(bl*17); }
+            case 14: { int w=vm.read16(texturePtr+idx*2)&0xffff;                    // ARGB1555
+                       if((w&0x8000)!=0) return 0; int r=(w>>10)&0x1f,g=(w>>5)&0x1f,bl=w&0x1f;
                        return 0xff000000|(Math.round(r*255f/31)<<16)|(Math.round(g*255f/31)<<8)|Math.round(bl*255f/31); }
             default: { int i=vm.read8(texturePtr+idx)&0xff; return (transp3d&&i==0)?0:palLookup(i); }
         }
@@ -495,7 +660,25 @@ public final class Renderer3D {
     }
 
     // ---------------- iluminacao T&L (VMGP3D) ----------------
-    public void setAmbientLight(int rgb){ ambientScene=rgb&0xffffff; }
+    // vSetAmbientLight(rgb): quando o bit VRGB_TAG (0x80000000, de vmgpvfmt.h) esta setado, os 16 bits
+    // baixos sao uma cor empacotada RGB555 (formato nativo do mophun) -- NAO um r8g8b8 nos 24 bits baixos.
+    // PROVA: o Anarchy Boxing 3D passa so dois valores, 0x80007BDE e 0x8000318C. Em RGB555 eles dao
+    // (30,30,30)/31 e (12,12,12)/31 = CINZAS NEUTROS (branco e cinza medio), exatamente o que uma luz
+    // ambiente deve ser. Nenhum outro formato os torna neutros: lidos como 0xRRGGBB viravam (0,123,222)
+    // e (0,49,140) -- azul puro, que tingia TODA a cena de azul (bug relatado).
+    public void setAmbientLight(int rgb){
+        // VRGB_TAG(0x80000000) e OR'd com a cor: a forma marcada e `VRGB_TAG | rgb555`, logo os bits
+        // 16..30 sao ZERO (Anarchy Boxing 3D: 0x80007BDE). Testar so o bit 31 era largo demais -- o
+        // tutorial Earth3D do SDK passa `vSetAmbientLight(0xff444444)`, que tem o bit 31 setado mas e
+        // um ARGB/r8g8b8 comum (cinza 0x444444); lido como RGB555 virava um vermelho errado.
+        if((rgb & 0x80000000) != 0 && (rgb & 0x7fff0000) == 0){   // VRGB_TAG -> RGB555 nos 16 bits baixos
+            int v = rgb & 0xffff;
+            int r5=(v>>10)&31, g5=(v>>5)&31, b5=v&31;
+            ambientScene = (Math.round(r5*255f/31)<<16)|(Math.round(g5*255f/31)<<8)|Math.round(b5*255f/31);
+        } else {
+            ambientScene = rgb & 0xffffff;                 // sem tag: r8g8b8 direto
+        }
+    }
     public void setCameraPos(int p){ camX=vx(p); camY=vy(p); camZ=vz(p); }
     public void resetLights(){ for(int i=0;i<MAXL;i++) lights[i]=null; }
     // LIGHT(40B): pos@0, dir@12, type@24(u16), diff r,g,b@26, spec sr,sg,sb@29, range@32(fixed=1/range), exponent@36(8:8), cutoff@38
@@ -531,32 +714,66 @@ public final class Renderer3D {
     int shadeVertex(int vertPtr,int normalPtr,int baseArgb){
         int alpha=baseArgb>>>24;
         float dr=(baseArgb>>16)&0xff, dg=(baseArgb>>8)&0xff, db=baseArgb&0xff;   // reflectancia difusa 0..255
-        // normal p/ view: rotaciona pela 3x3 da matriz atual (modelview) e normaliza
-        float nx=vx(normalPtr), ny=vy(normalPtr), nz=vz(normalPtr);
-        float wnx=current[0]*nx+current[1]*ny+current[2]*nz;
-        float wny=current[4]*nx+current[5]*ny+current[6]*nz;
-        float wnz=current[8]*nx+current[9]*ny+current[10]*nz;
+        // ILUMINACAO EM ESPACO DE OBJETO: a doc (5.33.1.15) diz que a matriz de luz "should be the
+        // INVERSE of the world matrix" -- o proposito e trazer as luzes ao espaco do OBJETO, onde as
+        // normais ja estao. Antes a normal ia p/ view (via `current`) e a luz pela inversa-do-mundo:
+        // dois espacos diferentes -> N.L incoerente.
+        float wnx=vx(normalPtr), wny=vy(normalPtr), wnz=vz(normalPtr);
         float nl=(float)Math.sqrt(wnx*wnx+wny*wny+wnz*wnz); if(nl>1e-6f){wnx/=nl;wny/=nl;wnz/=nl;}
-        // posicao view do vertice (p/ luzes point/spot)
-        float ox=f2f(vm.read32(vertPtr)),oy=f2f(vm.read32(vertPtr+4)),oz=f2f(vm.read32(vertPtr+8));
-        float wx=current[0]*ox+current[1]*oy+current[2]*oz+current[3];
-        float wy=current[4]*ox+current[5]*oy+current[6]*oz+current[7];
-        float wz=current[8]*ox+current[9]*oy+current[10]*oz+current[11];
+        float wx=f2f(vm.read32(vertPtr)), wy=f2f(vm.read32(vertPtr+4)), wz=f2f(vm.read32(vertPtr+8));
         float sar=((ambientScene>>16)&0xff)/255f, sag=((ambientScene>>8)&0xff)/255f, sab=(ambientScene&0xff)/255f;
         float rr=matEmR + dr*sar, gg=matEmG + dg*sag, bb=matEmB + db*sab;
         for(int li=0; li<MAXL; li++){ float[] L=lights[li]; if(L==null) continue;
             int type=(int)L[0]; float lx,ly,lz, atten=1f;
             if(type==2){                 // DIRECTIONAL: vetor p/ a luz = -dir (dir = para onde a luz viaja)
-                lx=-L[4]; ly=-L[5]; lz=-L[6];
+                // A DIRECAO passa pela MATRIZ DE LUZ (vMatrixSetLight) -- so a parte 3x3 (vetor, sem translacao).
+                float dx=L[4], dy=L[5], dz=L[6];
+                if(!LIGHTMAT_OFF && light!=null){
+                    float tx=light[0]*dx+light[1]*dy+light[2]*dz;
+                    float ty=light[4]*dx+light[5]*dy+light[6]*dz;
+                    float tz=light[8]*dx+light[9]*dy+light[10]*dz;
+                    dx=tx; dy=ty; dz=tz;
+                }
+                lx=-dx; ly=-dy; lz=-dz;
                 float ll=(float)Math.sqrt(lx*lx+ly*ly+lz*lz); if(ll>1e-6f){lx/=ll;ly/=ll;lz/=ll;}
             } else {                     // POINT/SPOT: vetor do vertice ate a luz + atenuacao por distancia
-                lx=L[1]-wx; ly=L[2]-wy; lz=L[3]-wz;
+                // A POSICAO passa pela MATRIZ DE LUZ completa (com translacao).
+                float px=L[1], py=L[2], pz=L[3];
+                if(!LIGHTMAT_OFF && light!=null){
+                    float tx=light[0]*px+light[1]*py+light[2]*pz+light[3];
+                    float ty=light[4]*px+light[5]*py+light[6]*pz+light[7];
+                    float tz=light[8]*px+light[9]*py+light[10]*pz+light[11];
+                    px=tx; py=ty; pz=tz;
+                }
+                lx=px-wx; ly=py-wy; lz=pz-wz;
                 float dist=(float)Math.sqrt(lx*lx+ly*ly+lz*lz); if(dist>1e-6f){lx/=dist;ly/=dist;lz/=dist;}
                 if(L[13]>0f){ atten=1f-dist*L[13]; if(atten<0f)atten=0f; }
             }
             float ndotl=wnx*lx+wny*ly+wnz*lz; if(ndotl<0f) ndotl=0f;
             float k=ndotl*atten;
             rr += dr*(L[7]/255f)*k; gg += dg*(L[8]/255f)*k; bb += db*(L[9]/255f)*k;
+            // ESPECULAR (Blinn-Phong) -- so com SPECULARENABLE(estado 16). Usa a cor especular da LUZ
+            // (sr,sg,sb), a do MATERIAL (spec do DSCOLOR/MATERIAL2) e o expoente shininess.
+            // Sem este termo nenhum brilho aparecia e as superficies ficavam chapadas.
+            if(specularEnable && !SPEC_OFF && ndotl>0f){
+                // observador em espaco de OBJETO: a origem do view levada pela inversa-do-mundo e
+                // exatamente a coluna de translacao da matriz de luz.
+                float eox=(light!=null? light[3]:0f)-wx, eoy=(light!=null? light[7]:0f)-wy, eoz=(light!=null? light[11]:0f)-wz;
+                float vlen=(float)Math.sqrt(eox*eox+eoy*eoy+eoz*eoz);
+                float ex=vlen>1e-6f? eox/vlen:0f, ey=vlen>1e-6f? eoy/vlen:0f, ez=vlen>1e-6f? eoz/vlen:1f;
+                float hx=lx+ex, hy=ly+ey, hz=lz+ez;
+                float hl=(float)Math.sqrt(hx*hx+hy*hy+hz*hz);
+                if(hl>1e-6f){ hx/=hl; hy/=hl; hz/=hl;
+                    float ndoth=wnx*hx+wny*hy+wnz*hz;
+                    if(ndoth>0f){
+                        float sh = matShininess>0.5f? matShininess : 4f;
+                        float sp = (float)Math.pow(ndoth, sh) * atten;
+                        rr += matSpecR * (L[10]/255f) * sp;
+                        gg += matSpecG * (L[11]/255f) * sp;
+                        bb += matSpecB * (L[12]/255f) * sp;
+                    }
+                }
+            }
         }
         return (alpha<<24)|(clamp((int)rr)<<16)|(clamp((int)gg)<<8)|clamp((int)bb);
     }
@@ -698,7 +915,14 @@ public final class Renderer3D {
         int r0=(col0>>16)&0xff,g0=(col0>>8)&0xff,b0=col0&0xff,a0=(col0>>>24);
         int r1=(col1>>16)&0xff,g1=(col1>>8)&0xff,b1=col1&0xff,a1=(col1>>>24);
         int r2=(col2>>16)&0xff,g2=(col2>>8)&0xff,b2=col2&0xff,a2=(col2>>>24);
-        boolean blend = alphaEnable;   // ALPHAENABLE(12) liga o blend; state 20 (COLORBUFFER_BLENDMODE) so escolhe o modo
+        // O blend com o color-buffer e comandado pelo COLORBUFFER_BLENDMODE (estado 20) SOZINHO:
+        // os tres tutoriais de blending do SDK (alpha3d, alphaadd3d, modulateblend3d) setam SO o
+        // estado 20 e NUNCA tocam em ALPHAENABLE(12). Exigir o 12 (como antes) fazia esses casos
+        // sairem opacos -- no Carmageddon 3D o jogo usa 20=[1,2] com 12 sempre 0, e os farois/
+        // pedestres/mao do motorista apareciam com fundo solido em vez de transparente.
+        // Mantido tambem o caminho inverso: o Rally liga SO o ALPHAENABLE (sem estado 20) p/ a
+        // sombra do carro -- por isso o OR, com ALPHA(2) como default nesse caso.
+        boolean blend = (colorBlend!=0) || alphaEnable;
         int fr=(fogColor>>16)&0xff, fg=(fogColor>>8)&0xff, fb=fogColor&0xff;
         float inv=1f/area;
         for(int py=minY;py<maxY;py++){ float fy=py+0.5f;
@@ -713,13 +937,19 @@ public final class Renderer3D {
                 // com o teste estrito LESS elas z-fightam e somem. Usa LEQUAL (<=) p/ passar sobre o coplanar.
                 if(zEnable){ boolean pass = blend ? (depth <= zbuf[zi]+1e-5f) : zTest(depth,zbuf[zi]); if(!pass) continue; }
                 float iws = (tex||fogEnable) ? (w0*iw0+w1*iw1+w2*iw2) : 0f;
-                int rr,gg,bb;
+                int rr,gg,bb, fragA;
                 if(tex){   // interpolacao perspective-correct de UV
                     float u=(w0*uv0[0]*iw0+w1*uv1[0]*iw1+w2*uv2[0]*iw2)/iws;
                     float v=(w0*uv0[1]*iw0+w1*uv1[1]*iw1+w2*uv2[1]*iw2)/iws;
                     int t=texSample(u,v);
                     if((t>>>24)==0) continue;      // texel transparente -> nao pinta NEM escreve z-buffer
                     int tr=(t>>16)&0xff, tg=(t>>8)&0xff, tb=t&0xff;
+                    // alpha do fragmento TEXTURIZADO = alpha do TEXEL (DECAL), modulado pelo vertice so em MODULATE.
+                    // Formatos opacos (RGB332/565/555/888) tem alpha=255 -> fragmento OPACO mesmo com ALPHAENABLE
+                    // ligado e alpha de vertice baixo. Sem isto, o CEU do Joe's Treasure Quest (quad texturizado
+                    // RGB332, DECAL, vertice alpha=0x80) saia a 50% e o frame anterior vazava -> fundo vazio/smearing.
+                    int ta=t>>>24;
+                    fragA = (texBlendMode==2) ? (ta*((int)(w0*a0+w1*a1+w2*a2))/255) : ta;
                     switch(texBlendMode){          // combina texel x cor difusa do fragmento (state 11)
                         case 2: { int vr=(int)(w0*r0+w1*r1+w2*r2),vg=(int)(w0*g0+w1*g1+w2*g2),vb=(int)(w0*b0+w1*b1+w2*b2);
                                   rr=tr*vr/255; gg=tg*vg/255; bb=tb*vb/255; break; }       // MODULATE
@@ -729,6 +959,7 @@ public final class Renderer3D {
                     }
                 } else {
                     rr=(int)(w0*r0+w1*r1+w2*r2); gg=(int)(w0*g0+w1*g1+w2*g2); bb=(int)(w0*b0+w1*b1+w2*b2);
+                    fragA=(int)(w0*a0+w1*a1+w2*a2);   // nao-texturizado: alpha do VERTICE (ex.: sombra do Rally)
                 }
                 if(fogEnable){                     // mistura com a cor do fog pela profundidade (state 8)
                     float f=fogFactor(iws>1e-9f?1f/iws:fogEnd);
@@ -736,7 +967,7 @@ public final class Renderer3D {
                 }
                 rr=clamp(rr); gg=clamp(gg); bb=clamp(bb);
                 if(blend){                         // color-buffer blend com o pixel ja no framebuffer (state 20)
-                    int sa=(int)(w0*a0+w1*a1+w2*a2); if(sa<0)sa=0; else if(sa>255)sa=255;
+                    int sa=fragA; if(sa<0)sa=0; else if(sa>255)sa=255;   // alpha do fragmento (texel se texturizado; senao vertice)
                     int dst=scr.fb[py*scr.pw+px], dr=(dst>>16)&0xff, dg=(dst>>8)&0xff, db=dst&0xff;
                     // sem state 20 explicito, o default e ALPHA (SrcAlpha/InvSrcAlpha) = alpha do vertice/textura.
                     // Rally desenha a SOMBRA do carro como poligono preto com alpha=0x80 (50%) e SO liga ALPHAENABLE;

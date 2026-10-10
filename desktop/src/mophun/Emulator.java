@@ -110,8 +110,9 @@ public final class Emulator extends JFrame {
     }
 
     // ---------------- diálogo "Sobre" ----------------
-    void aboutDialog(){
-        String body = "<html><div style='text-align:center; width:340px; font-family:sans-serif;'>"
+    /** corpo HTML do "Sobre". Separado do dialogo p/ poder ser conferido sem abrir janela. */
+    static String aboutBody(){
+        return "<html><div style='text-align:center; width:340px; font-family:sans-serif;'>"
             + "<div style='font-size:16px; font-weight:bold; color:#e8451f;'>" + Branding.APP_NAME + "</div>"
             + "<div style='margin-top:2px;'>" + Lang.t("about.tagline") + "</div>"
             + "<br>"
@@ -122,10 +123,86 @@ public final class Emulator extends JFrame {
             + "<div>" + Lang.t("about.studio") + ": <b>" + Branding.VENDOR + "</b></div>"
             + "<div style='color:#888888; margin-top:6px;'>&copy; " + Branding.YEAR + " &middot; " + Branding.URL + "</div>"
             + "</div></html>";
+    }
+
+    /** Bloco de apoio ao projeto: rotulo, QR do Ko-fi e o link clicavel.
+     *  Devolve null se o QR nao estiver presente -- o "Sobre" continua valido sem ele, e
+     *  e isso que acontece numa arvore sem a pasta assets. */
+    static JComponent painelApoio(){
+        Image qr = Branding.kofiQr();
+        JPanel col = new JPanel();
+        col.setLayout(new BoxLayout(col, BoxLayout.Y_AXIS));
+        col.setOpaque(false);
+        col.setBorder(BorderFactory.createEmptyBorder(14, 0, 0, 0));
+
+        JLabel titulo = new JLabel(Lang.t("about.support"), SwingConstants.CENTER);
+        titulo.setFont(titulo.getFont().deriveFont(Font.BOLD));
+        titulo.setAlignmentX(Component.CENTER_ALIGNMENT);
+        col.add(titulo);
+
+        if(qr != null){
+            // 150 px: grande o bastante para a camera de um celular ler da tela, pequeno o
+            // bastante para o dialogo nao virar uma parede. O PNG e o original do Ko-fi, de
+            // 820x820, entao reduzir aqui tem resolucao de sobra e nao serrilha.
+            JLabel img = new JLabel(new ImageIcon(qr.getScaledInstance(150, 150, Image.SCALE_SMOOTH)));
+            img.setAlignmentX(Component.CENTER_ALIGNMENT);
+            img.setBorder(BorderFactory.createEmptyBorder(8, 0, 6, 0));
+            col.add(img);
+
+            JLabel dica = new JLabel(Lang.t("about.scan"), SwingConstants.CENTER);
+            dica.setFont(dica.getFont().deriveFont(Font.PLAIN, dica.getFont().getSize2D() - 1f));
+            dica.setForeground(new Color(0x88, 0x88, 0x88));
+            dica.setAlignmentX(Component.CENTER_ALIGNMENT);
+            col.add(dica);
+        }
+
+        // O link e um JLabel e nao um texto no HTML do corpo porque dentro de um
+        // JOptionPane o HTML nao recebe clique: so pintaria de azul sem abrir nada.
+        // E o sublinhado vem do FONTE, nao de <u> em HTML: um JLabel com HTML declara
+        // largura maxima infinita, o BoxLayout o estica na coluna inteira e o
+        // setAlignmentX deixa de valer -- o link aparecia colado na esquerda enquanto o
+        // resto do bloco estava centrado.
+        final JLabel link = new JLabel(Branding.KOFI, SwingConstants.CENTER);
+        java.util.Map<java.awt.font.TextAttribute,Object> attrs =
+            new java.util.HashMap<java.awt.font.TextAttribute,Object>();
+        attrs.put(java.awt.font.TextAttribute.UNDERLINE, java.awt.font.TextAttribute.UNDERLINE_ON);
+        link.setFont(link.getFont().deriveFont(attrs));
+        link.setForeground(new Color(0x1f, 0x6f, 0xe8));
+        link.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        link.setAlignmentX(Component.CENTER_ALIGNMENT);
+        link.setBorder(BorderFactory.createEmptyBorder(6, 0, 0, 0));
+        link.addMouseListener(new MouseAdapter(){
+            @Override public void mouseClicked(MouseEvent e){ abrirNoNavegador(Branding.KOFI); }
+        });
+        col.add(link);
+        return col;
+    }
+
+    /** Abre uma URL no navegador do sistema. Silencioso de proposito: um ambiente sem
+     *  Desktop.BROWSE (varios Linux sem DE) nao deve derrubar o dialogo "Sobre" -- o
+     *  endereco continua visivel na tela para copiar a mao. */
+    static void abrirNoNavegador(String url){
+        try {
+            if(Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.BROWSE))
+                Desktop.getDesktop().browse(new java.net.URI(url));
+        } catch(Throwable t){ }
+    }
+
+    void aboutDialog(){
         Icon ic = null;
         Image logo = Branding.logo();
         if(logo != null) ic = new ImageIcon(logo.getScaledInstance(84, 84, Image.SCALE_SMOOTH));
-        JOptionPane.showMessageDialog(this, body, Lang.t("m.about"), JOptionPane.INFORMATION_MESSAGE, ic);
+
+        // Passou de uma String para um painel: o corpo continua sendo o MESMO HTML de
+        // aboutBody() (que os testes conferem sem abrir janela), e embaixo dele entra o
+        // bloco de apoio, que precisa de clique e de imagem -- nenhum dos dois funciona
+        // dentro do HTML de um JOptionPane.
+        JPanel raiz = new JPanel(new BorderLayout());
+        raiz.setOpaque(false);
+        raiz.add(new JLabel(aboutBody()), BorderLayout.NORTH);
+        raiz.add(painelApoio(), BorderLayout.CENTER);
+
+        JOptionPane.showMessageDialog(this, raiz, Lang.t("m.about"), JOptionPane.INFORMATION_MESSAGE, ic);
     }
 
     // ---------------- corpo (biblioteca + preview) ----------------
@@ -180,6 +257,7 @@ public final class Emulator extends JFrame {
     // ---------------- aparencia (tema: cores + fonte) ----------------
     /** aplica o tema atual (cfg) a esta janela + dialogos, e destaca o botao Jogar com a cor de acento. */
     void applyTheme(){
+        Theme.exactColors = cfg.exactColors;   // antes de montar o tema: o ajuste de contraste le isto
         Theme t = Theme.resolve(cfg);
         Theme.apply(t, cfg.uiFont, cfg.uiFontSize);
         if(t!=null){
@@ -204,6 +282,7 @@ public final class Emulator extends JFrame {
         // snapshot p/ cancelar (restaura tudo se o usuario desistir)
         final String oT=cfg.theme, oF=cfg.uiFont; final int oSz=cfg.uiFontSize,
             oBg=cfg.uiBg, oPn=cfg.uiPanel, oFg=cfg.uiFg, oAc=cfg.uiAccent;
+        final boolean oEx = cfg.exactColors;
 
         final String[] ids = Theme.ids();
         final JComboBox<String> themeBox = new JComboBox<String>();
@@ -226,6 +305,7 @@ public final class Emulator extends JFrame {
         final JSpinner sizeSp = new JSpinner(new SpinnerNumberModel(cfg.uiFontSize, 9, 28, 1));
 
         // botoes de cor (swatches) — marcados p/ o tema NAO os repintar (mantem a cor verdadeira)
+        final JCheckBox exactBox = new JCheckBox(Lang.t("ap.exact"), cfg.exactColors);
         final JButton bgBtn = new JButton(), pnBtn = new JButton(), fgBtn = new JButton(), acBtn = new JButton();
         for(JButton b : new JButton[]{bgBtn,pnBtn,fgBtn,acBtn}) b.putClientProperty("themeSwatch", Boolean.TRUE);
 
@@ -248,6 +328,8 @@ public final class Emulator extends JFrame {
             }
             cfg.uiFont = (String)fontBox.getSelectedItem();
             cfg.uiFontSize = (Integer)sizeSp.getValue();
+            cfg.exactColors = exactBox.isSelected();
+            Theme.exactColors = cfg.exactColors;    // lido pelo ajuste de contraste
             applyTheme();
             // re-afirma os swatches DEPOIS de aplicar o tema (o updateComponentTreeUI reseta cores;
             // como sao 'themeSwatch' o applyTree os ignora, entao restauramos aqui com texto de contraste)
@@ -273,6 +355,7 @@ public final class Emulator extends JFrame {
             }});
         }
 
+        exactBox.addActionListener(e -> live.run());
         themeBox.addActionListener(e -> live.run());
         fontBox.addActionListener(e -> live.run());
         sizeSp.addChangeListener(e -> live.run());
@@ -285,6 +368,7 @@ public final class Emulator extends JFrame {
         p.add(new JLabel(Lang.t("ap.panel")));  p.add(pnBtn);
         p.add(new JLabel(Lang.t("ap.text")));   p.add(fgBtn);
         p.add(new JLabel(Lang.t("ap.accent"))); p.add(acBtn);
+        p.add(new JLabel(""));                  p.add(exactBox);
         int r = JOptionPane.showConfirmDialog(this, p, Lang.t("dlg.appearance"),
             JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
         if(r==JOptionPane.OK_OPTION){
@@ -292,15 +376,54 @@ public final class Emulator extends JFrame {
         } else {
             // cancelar: restaura tudo e re-aplica o tema anterior
             cfg.theme=oT; cfg.uiFont=oF; cfg.uiFontSize=oSz; cfg.uiBg=oBg; cfg.uiPanel=oPn; cfg.uiFg=oFg; cfg.uiAccent=oAc;
+            cfg.exactColors=oEx; Theme.exactColors=oEx;
             applyTheme();
         }
     }
+    /**
+     * Abre um JFileChooser com as cores do SISTEMA (ver Theme.pushNative): com o tema aplicado o
+     * seletor do Windows ficava com fundo claro e letra azul-clara, ilegivel na hora de escolher
+     * a pasta dos jogos. Devolve o arquivo escolhido, ou null se cancelou.
+     */
+    File escolher(File dirInicial, boolean sohPastas, String titulo, javax.swing.filechooser.FileFilter filtro, boolean salvar){
+        Theme.pushNative();
+        try {
+            JFileChooser fc = new JFileChooser(dirInicial);
+            if(sohPastas) fc.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+            if(titulo!=null) fc.setDialogTitle(titulo);
+            if(filtro!=null) fc.setFileFilter(filtro);
+            int r = salvar ? fc.showSaveDialog(this) : fc.showOpenDialog(this);
+            return r==JFileChooser.APPROVE_OPTION ? fc.getSelectedFile() : null;
+        } finally {
+            Theme.popTheme(cfg);
+        }
+    }
+
     // helpers de cor p/ os botoes-swatch
-    static int colorOf(JButton b){ Color c=b.getBackground(); return c!=null? (c.getRGB()&0xFFFFFF) : 0; }
+    // A cor escolhida fica num ICONE desenhado, nao no fundo do botao: o Look&Feel do Windows
+    // IGNORA setBackground em JButton, entao tres dos quatro quadradinhos apareciam vazios (e o
+    // texto branco sumia no botao branco). Com icone a cor aparece em qualquer L&F.
+    static int colorOf(JButton b){
+        Object v = b.getClientProperty("swatchColor");
+        return (v instanceof Color) ? (((Color)v).getRGB() & 0xFFFFFF) : 0;
+    }
     static void setBtnColor(JButton b, Color c){
-        b.setBackground(c); b.setOpaque(true); b.setBorderPainted(true);
-        b.setText("  #"+String.format("%06X", c.getRGB()&0xFFFFFF)+"  ");
-        b.setForeground(Theme.contrast(c));
+        b.putClientProperty("swatchColor", c);
+        b.setIcon(new SwatchIcon(c));
+        b.setText(" #"+String.format("%06X", c.getRGB()&0xFFFFFF));
+        b.setHorizontalAlignment(SwingConstants.LEFT);
+        b.setForeground(Theme.fgControle(new Color(0x101010)));   // legivel sobre o fundo real do botao
+    }
+    /** quadradinho da cor, com borda p/ aparecer mesmo quando a cor e igual ao fundo */
+    static final class SwatchIcon implements Icon {
+        private final Color c;
+        SwatchIcon(Color c){ this.c = c; }
+        public int getIconWidth(){ return 26; }
+        public int getIconHeight(){ return 14; }
+        public void paintIcon(Component comp, Graphics g, int x, int y){
+            g.setColor(c); g.fillRect(x, y, 26, 14);
+            g.setColor(Theme.contrast(c)); g.drawRect(x, y, 25, 13);
+        }
     }
 
     // ---------------- biblioteca ----------------
@@ -417,30 +540,35 @@ public final class Emulator extends JFrame {
         int r = JOptionPane.showOptionDialog(this, Lang.t("sf.current")+" "+cur, Lang.t("m.soundfont"),
             JOptionPane.DEFAULT_OPTION, JOptionPane.QUESTION_MESSAGE, null, opts, opts[0]);
         if(r==0){
-            JFileChooser fc = new JFileChooser(cfg.soundFont!=null? new File(cfg.soundFont).getParentFile() : null);
-            fc.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("SoundFont (*.sf2)","sf2"));
-            if(fc.showOpenDialog(this)==JFileChooser.APPROVE_OPTION){
-                cfg.soundFont = fc.getSelectedFile().getAbsolutePath(); cfg.save();
+            File sel = escolher(cfg.soundFont!=null? new File(cfg.soundFont).getParentFile() : null,
+                false, null, new javax.swing.filechooser.FileNameExtensionFilter("SoundFont (*.sf2)","sf2"), false);
+            if(sel!=null){
+                cfg.soundFont = sel.getAbsolutePath(); cfg.save();
                 JOptionPane.showMessageDialog(this, Lang.t("sf.applied"));
             }
         } else if(r==1){ cfg.soundFont = null; cfg.save(); JOptionPane.showMessageDialog(this, Lang.t("sf.applied")); }
     }
 
     void chooseRoot(){
-        JFileChooser fc = new JFileChooser(cfg.gamesRoot!=null? new File(cfg.gamesRoot) : null);
-        fc.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
-        fc.setDialogTitle(Lang.t("m.selromtitle"));
-        if(fc.showOpenDialog(this)==JFileChooser.APPROVE_OPTION){
-            cfg.gamesRoot = fc.getSelectedFile().getAbsolutePath();
+        File sel = escolher(cfg.gamesRoot!=null? new File(cfg.gamesRoot) : null,
+                            true, Lang.t("m.selromtitle"), null, false);
+        if(sel!=null){
+            cfg.gamesRoot = sel.getAbsolutePath();
             cfg.save();
             reloadLibrary();
         }
     }
+    /** Abre uma ROM vinda da linha de comando / do gerenciador de arquivos (Exec=wolphun %f). */
+    public void openRomFile(File f){
+        if(f==null || !f.isFile()) return;
+        launch(new Game(GameLibrary.stripExt(f.getName()), f, null, java.util.Collections.singletonList(f)), f);
+    }
+
     void openSingleRom(){
-        JFileChooser fc = new JFileChooser(cfg.gamesRoot!=null? new File(cfg.gamesRoot) : null);
-        fc.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("ROM mophun (*.mpn)","mpn"));
-        if(fc.showOpenDialog(this)==JFileChooser.APPROVE_OPTION){
-            File f = fc.getSelectedFile();
+        File selRom = escolher(cfg.gamesRoot!=null? new File(cfg.gamesRoot) : null,
+                               false, null, new javax.swing.filechooser.FileNameExtensionFilter("ROM mophun (*.mpn)","mpn"), false);
+        if(selRom!=null){
+            File f = selRom;
             launch(new Game(GameLibrary.stripExt(f.getName()), f, null, java.util.Collections.singletonList(f)), f);
         }
     }
@@ -460,12 +588,17 @@ public final class Emulator extends JFrame {
             Lang.t("dec.savetitle"), JOptionPane.DEFAULT_OPTION, JOptionPane.QUESTION_MESSAGE, null, opts, opts[0]);
         try {
             if(r==0){                                   // salvar copia
-                JFileChooser fc = new JFileChooser(src.getParentFile());
-                fc.setDialogTitle(Lang.t("dec.saveas"));
-                fc.setSelectedFile(new File(src.getParentFile(), GameLibrary.stripExt(src.getName())+"_decrypted.mpn"));
-                if(fc.showSaveDialog(this)!=JFileChooser.APPROVE_OPTION) return;
-                if(MophunCrypt.decryptTo(src, fc.getSelectedFile()))
-                    JOptionPane.showMessageDialog(this, Lang.t("dec.saved")+"\n"+fc.getSelectedFile().getAbsolutePath());
+                File destino;
+                Theme.pushNative();                     // seletor com as cores do sistema (legivel)
+                try {
+                    JFileChooser fc = new JFileChooser(src.getParentFile());
+                    fc.setDialogTitle(Lang.t("dec.saveas"));
+                    fc.setSelectedFile(new File(src.getParentFile(), GameLibrary.stripExt(src.getName())+"_decrypted.mpn"));
+                    if(fc.showSaveDialog(this)!=JFileChooser.APPROVE_OPTION) return;
+                    destino = fc.getSelectedFile();
+                } finally { Theme.popTheme(cfg); }
+                if(MophunCrypt.decryptTo(src, destino))
+                    JOptionPane.showMessageDialog(this, Lang.t("dec.saved")+"\n"+destino.getAbsolutePath());
                 else JOptionPane.showMessageDialog(this, Lang.t("dec.nokeyrsa"), Lang.t("dlg.fail"), JOptionPane.WARNING_MESSAGE);
             } else if(r==1){                            // substituir original (destrutivo)
                 int c = JOptionPane.showConfirmDialog(this,
@@ -488,6 +621,9 @@ public final class Emulator extends JFrame {
         final JSpinner gammaSp = new JSpinner(new SpinnerNumberModel(cfg.gamma,0.40,1.00,0.05));
         final JSpinner fontSp  = new JSpinner(new SpinnerNumberModel(cfg.fontScale,1.00,2.50,0.10));
         final JSpinner hdSp    = new JSpinner(new SpinnerNumberModel(cfg.renderScale,1,4,1));
+        final JComboBox<String> tfBox = new JComboBox<String>(new String[]{
+            Lang.t("tf.game"), Lang.t("tf.linear"), Lang.t("tf.nearest")});
+        tfBox.setSelectedIndex(Math.max(0, Math.min(2, cfg.texFilter)));
         String[] presets = {"101 x 80","128 x 128","128 x 160","176 x 208","176 x 220","208 x 208","208 x 320","240 x 320"};
         final JComboBox<String> resBox = new JComboBox<String>(presets);
         resBox.setEditable(true);
@@ -507,12 +643,14 @@ public final class Emulator extends JFrame {
         p.add(new JLabel(Lang.t("lbl.gamma")));  p.add(gammaSp);
         p.add(new JLabel(Lang.t("lbl.fontsize"))); p.add(fontSp);
         p.add(new JLabel(Lang.t("lbl.hd")));     p.add(hdSp);
+        p.add(new JLabel(Lang.t("lbl.texfilter"))); p.add(tfBox);
         if(JOptionPane.showConfirmDialog(this,p,Lang.t("dlg.video"),JOptionPane.OK_CANCEL_OPTION,JOptionPane.PLAIN_MESSAGE)==JOptionPane.OK_OPTION){
             cfg.scale = (Integer)scaleSp.getValue();
             cfg.targetFps = (Integer)fpsSp.getValue();
             cfg.gamma = ((Number)gammaSp.getValue()).doubleValue();
             cfg.fontScale = ((Number)fontSp.getValue()).doubleValue();
             cfg.renderScale = (Integer)hdSp.getValue();
+            cfg.texFilter = tfBox.getSelectedIndex();
             cfg.deviceModel = modelBox.getSelectedIndex();
             int[] wh = parseRes((String)resBox.getSelectedItem());
             if(wh!=null){ cfg.width=wh[0]; cfg.height=wh[1]; }
@@ -617,9 +755,12 @@ public final class Emulator extends JFrame {
             File guess = new File("C:/Users/tavar/Downloads/Mophun_Archive_2.1/Games_SE");
             if(guess.isDirectory()){ cfg.gamesRoot = guess.getAbsolutePath(); cfg.save(); }
         }
+        // "wolphun jogo.mpn": abre a ROM direto (o .desktop do pacote Linux usa Exec=wolphun %f)
+        final File romArg = (args.length>0 && new File(args[0]).isFile()) ? new File(args[0]) : null;
         SwingUtilities.invokeLater(new Runnable(){ public void run(){
             Theme.setUIManager(Theme.resolve(cfg), cfg.uiFont, cfg.uiFontSize);   // dialogos ja nascem no tema
-            new Emulator(cfg);
+            Emulator em = new Emulator(cfg);
+            if(romArg != null) em.openRomFile(romArg);
         } });
     }
 }

@@ -1,0 +1,30 @@
+/* wolphun.hrh - ids de comando da UI, compartilhados entre o .rss e o C++. */
+#ifndef WOLPHUN_HRH
+#define WOLPHUN_HRH
+
+enum TWolphunCommandIds {
+    EWolphunCmdOpenRom = 0x6000,   /* lista TODOS os jogos das pastas cadastradas */
+    EWolphunCmdBrowseFile,         /* navegador de arquivos NATIVO: abre um .mpn direto */
+    EWolphunCmdFolders,            /* submenu Pastas de jogos */
+    EWolphunCmdAddFolder,          /* cadastrar mais uma pasta (bulk) */
+    EWolphunCmdRemoveFolder,       /* descadastrar uma pasta */
+    EWolphunCmdRestart,            /* reiniciar o jogo atual */
+    EWolphunCmdCloseRom,           /* fechar o jogo e voltar a lista */
+    EWolphunCmdSettings,           /* submenu Configuracoes */
+    EWolphunCmdSetResolution,      /* resolucao POR JOGO */
+    EWolphunCmdSetSound,           /* som ligado/desligado */
+    EWolphunCmdSetTexFilter,       /* filtro de textura (3D) */
+    EWolphunCmdSetKeyProfile,      /* perfil de teclas: QWERTY / numerico */
+    EWolphunCmdEditKeys,           /* mapeamento LIVRE: uma tecla por acao */
+    EWolphunCmdSetScaling,         /* ajuste da imagem na tela */
+    EWolphunCmdSetPowerSave,       /* economia de bateria (ciclo de trabalho da CPU) */
+    EWolphunCmdSetLanguage,        /* idioma da interface */
+    EWolphunCmdAbout,
+    /* TELA CHEIA. Acrescentados no FIM de proposito: inserir no meio mudaria o
+       valor de todos os ids seguintes sem necessidade nenhuma. */
+    EWolphunCmdFullscreen,         /* liga/desliga: o jogo ocupa a tela inteira */
+    EWolphunCmdSetFullKey,         /* escolhe a tecla que alterna a tela cheia */
+    EWolphunCmdSetVibrate          /* vibracao do aparelho ligada/desligada */
+};
+
+#endif /* WOLPHUN_HRH */

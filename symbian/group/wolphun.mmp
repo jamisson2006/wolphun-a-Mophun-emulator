@@ -1,0 +1,130 @@
+TARGET          wolphun.exe
+TARGETTYPE      exe
+UID             0x100039CE 0xA0000180
+
+// Sem capabilities: o pacote pode ser AUTO-ASSINADO e instalado em qualquer aparelho.
+CAPABILITY      NONE
+/* Marca a linha EKA2 (Symbian 9.x). O .mmp do 2nd Edition (8.1, EKA1) NAO define
+   isto, e e assim que o codigo escolhe e32debug.h ou e32svr.h para o RDebug. */
+MACRO           __SYMBIAN_9__
+
+// A VM precisa de folga: jogos grandes pedem varios MB de heap (o proprio header do
+// .mpn diz quanto). A pilha padrao do Symbian (8 KB) e apertada para o interpretador.
+EPOCSTACKSIZE   0x8000
+EPOCHEAPSIZE    0x10000 0x2000000
+
+SOURCEPATH      ..\src
+SOURCE          WolphunApp.cpp
+SOURCE          WolphunAppUi.cpp
+SOURCE          WolphunAppView.cpp
+SOURCE          WolphunConfig.cpp
+SOURCE          WolphunEngine.cpp
+SOURCE          WolphunAudio.cpp
+SOURCE          WolphunLang.cpp
+SOURCE          WolphunWsd.cpp
+SOURCE          WolphunVibra.cpp
+
+// nucleo portavel da VM (sem Symbian, sem STL, sem libc)
+SOURCEPATH      ..\src\vm
+SOURCE          Vmgp.cpp
+// MidiSeq.cpp NAO entra: o sequenciador proprio so e usado pelo teste de PC
+// (test/midtest.cpp). No aparelho quem toca e o motor MIDI do sistema.
+SOURCE          MophunCrypt.cpp
+SOURCE          Pip2.cpp
+SOURCE          Screen.cpp
+SOURCE          VSound.cpp
+SOURCE          Sdk.cpp
+SOURCE          SdkDraw.cpp
+SOURCE          SdkIO.cpp
+SOURCE          SdkApi.cpp
+SOURCE          Renderer3D.cpp
+SOURCE          Renderer3DRaster.cpp
+
+// O interpretador conta com overflow de inteiro com sinal dando a volta (igual ao
+// Java de origem) -- sem -fwrapv o GCC trata isso como comportamento indefinido e
+// pode otimizar comparacoes fora. -fsigned-char: no ARM o 'char' e sem sinal por
+// padrao, no x86 do teste de PC e com sinal; forcar deixa os dois identicos.
+// -fno-strict-aliasing protege os truques de bits do fastmath.h.
+/* Pede modo ARM (em vez de THUMB) para o laco do interpretador e o rasterizador.
+   ATENCAO ao avaliar isto: com o GCCE deste SDK e um NO-OP. O keyword troca
+   THUMB_INSTRUCTION_SET por ARM_INSTRUCTION_SET no makefile gerado, mas em
+   epoc32/tools/compilation_config/gcce.mk AS DUAS variaveis sao VAZIAS -- o GCCE ja
+   compila em ARM sempre. Fica declarado porque e correto e passaria a valer se o projeto
+   algum dia for compilado com RVCT, mas NAO espere ganho de velocidade daqui. */
+ALWAYS_BUILD_AS_ARM
+
+/* -O3 depois do -O2 do SDK: na linha de comando gerada, CCFLAGS (onde estas opcoes entram)
+   vem DEPOIS de REL_OPTIMISATION, entao o ultimo -O vence. -funit-at-a-time desfaz o
+   -fno-unit-at-a-time que o SDK forca e que impede boa parte do inlining entre funcoes --
+   exatamente o que o laco por pixel precisa. */
+OPTION GCCE     -fwrapv -fsigned-char -fno-strict-aliasing -O3 -funit-at-a-time -fomit-frame-pointer
+
+USERINCLUDE     ..\inc
+SYSTEMINCLUDE   \epoc32\include
+SYSTEMINCLUDE   \epoc32\include\variant
+
+SOURCEPATH      ..\data
+START RESOURCE  wolphun.rss
+HEADER
+TARGETPATH      \resource\apps
+END
+
+// ORDEM IMPORTA: o _reg.rss faz #include <wolphun_loc.rsg>, entao o _loc TEM de ser
+// compilado antes (HEADER gera o .rsg com os ids).
+START RESOURCE  wolphun_loc.rss
+HEADER
+TARGETPATH      \resource\apps
+END
+
+START RESOURCE  wolphun_reg.rss
+TARGETPATH      \private\10003a3f\apps
+END
+
+// ICONE do aplicativo. O logo e o mesmo da versao desktop (assets/wolphun.png,
+// 1024x1024 RGBA), reduzido para 88x88 -- o AknIcon escala a partir dai para o
+// tamanho que cada aparelho usa na grade do menu.
+// A mascara e de 8 bits, nao 1: com 1 bit a borda arredondada do logo sairia
+// serrilhada; com 8 o aparelho mistura cor e fundo e a borda fica lisa.
+// Nao usamos .mif porque o mifconv deste SDK nao gera SVG-T (falta o
+// svgtbinencode.exe) -- e um .mbm serve igual para icon_file.
+START BITMAP    wolphun_aif.mbm
+HEADER
+TARGETPATH      \resource\apps
+// o SOURCEPATH vale DENTRO do bloco; posto antes do START BITMAP ele e ignorado e
+// o make procura os .bmp no proprio group/.
+SOURCEPATH      ..\gfx
+SOURCE          c24 wolphun_icon.bmp
+SOURCE          8   wolphun_icon_mask.bmp
+END
+
+LIBRARY         euser.lib
+LIBRARY         apparc.lib
+LIBRARY         cone.lib
+LIBRARY         eikcore.lib
+LIBRARY         eikcoctl.lib
+LIBRARY         eikdlg.lib
+LIBRARY         avkon.lib
+LIBRARY         commonengine.lib
+LIBRARY         efsrv.lib
+LIBRARY         estor.lib
+LIBRARY         bafl.lib
+LIBRARY         fbscli.lib
+LIBRARY         gdi.lib
+LIBRARY         ws32.lib
+LIBRARY         aknskins.lib
+LIBRARY         aknskinsrv.lib
+LIBRARY         aknicon.lib
+LIBRARY         hal.lib
+// vibracao do aparelho (nenhuma capability exigida)
+LIBRARY         hwrmvibraclient.lib
+
+LIBRARY         commondialogs.lib
+
+LIBRARY         platformenv.lib
+// som: stream PCM (VSound) e tocador de recursos MIDI (vPlayResource)
+LIBRARY         mediaclientaudiostream.lib
+// CMdaAudioPlayerUtility: tocador generico do sistema. Dado um .mid ele roteia para o
+// mesmo motor MIDI do aparelho (mesmo banco General MIDI), mas com Stop() SINCRONO e fim
+// de reproducao explicito (MapcPlayComplete). E o que o Asphalt 4 da Gameloft usa: aquele
+// jogo embarca SMF e nao importa midiclient.lib.
+LIBRARY         mediaclientaudio.lib

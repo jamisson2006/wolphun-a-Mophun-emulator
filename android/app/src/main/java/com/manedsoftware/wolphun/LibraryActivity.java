@@ -47,10 +47,13 @@ public final class LibraryActivity extends AppCompatActivity {
         setContentView(R.layout.activity_library);
         list  = findViewById(R.id.list);
         empty = findViewById(R.id.empty);
+        empty.setText(Lang.t("lib.empty") + getExternalFilesDir(null) + "/roms/");   // i18n + caminho real
+
         list.setLayoutManager(new LinearLayoutManager(this));
         list.setAdapter(new Adapter());
 
         FloatingActionButton fab = findViewById(R.id.fab);
+        fab.setContentDescription(Lang.t("lbl.addrom"));
         fab.setOnClickListener(new View.OnClickListener(){
             public void onClick(View v){ openPicker(); }
         });
@@ -281,16 +284,111 @@ public final class LibraryActivity extends AppCompatActivity {
     }
     private void showAbout(){
         String msg = Lang.t("about.tagline") + "\n\n"
-            + Lang.t("lbl.version") + " 0.1.0 beta — " + Lang.t("about.firstbeta") + "\n\n"
-            + Lang.t("about.developer") + ": Jamisson Tavares\n"
-            + Lang.t("about.studio") + ": Maned Software\n\n"
-            + "© 2026 · youtube.com/@jamissontavares7671";
-        new android.app.AlertDialog.Builder(this)
-            .setTitle("wolphun emulator")
-            .setIcon(R.drawable.wolphun_logo)
-            .setMessage(msg)
+            // le a versao do build.gradle (BuildConfig). Estava "0.1.0" CHUMBADO aqui e ficou para
+            // tras quando o app foi p/ 0.2.0 — a tela "Sobre" mentia a versao. Agora so ha uma fonte.
+            + Lang.t("lbl.version") + " " + BuildConfig.VERSION_NAME + " — " + Lang.t("about.firstbeta") + "\n\n"
+            + Lang.t("about.developer") + ": " + Branding.AUTHOR + "\n"
+            + Lang.t("about.studio") + ": " + Branding.VENDOR + "\n\n"
+            + "© " + Branding.YEAR + " · " + Branding.URL;
+        // Titulo PROPRIO em vez de setTitle+setIcon, para levar o logo ao lado do nome.
+        // O corpo deixou de ser setMessage(String) e virou uma View: o bloco de apoio tem
+        // imagem e link clicavel, e nenhum dos dois cabe num texto simples.
+        final android.app.AlertDialog dlg = new android.app.AlertDialog.Builder(this)
+            .setCustomTitle(tituloSobre())
+            .setView(corpoSobre(msg))
             .setPositiveButton("OK", null)
-            .show();
+            .create();
+        dlg.show();
+    }
+
+    /** Corpo do "Sobre": o texto de sempre mais o bloco de apoio ao projeto (QR do Ko-fi
+     *  e o link). Vai dentro de um ScrollView porque em tela pequena, com o idioma russo
+     *  e o QR, o conteudo passa da altura do dialogo -- sem rolagem o botao OK sai da tela. */
+    private View corpoSobre(String msg){
+        final float dp = getResources().getDisplayMetrics().density;
+        int pad = Math.round(16 * dp);
+
+        android.widget.LinearLayout col = new android.widget.LinearLayout(this);
+        col.setOrientation(android.widget.LinearLayout.VERTICAL);
+        col.setPadding(pad, pad / 2, pad, 0);
+
+        TextView texto = new TextView(this);
+        texto.setText(msg);
+        texto.setTextIsSelectable(true);
+        col.addView(texto);
+
+        TextView apoio = new TextView(this);
+        apoio.setText(Lang.t("about.support"));
+        apoio.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        apoio.setPadding(0, Math.round(18 * dp), 0, Math.round(8 * dp));
+        apoio.setGravity(android.view.Gravity.CENTER_HORIZONTAL);
+        col.addView(apoio);
+
+        // 180dp: tamanho confortavel para OUTRO celular ler o codigo da tela deste.
+        int sz = Math.round(180 * dp);
+        android.widget.ImageView qr = new android.widget.ImageView(this);
+        qr.setImageResource(R.drawable.kofi_qr);
+        // O PNG e o original do Ko-fi (820x820) e ja vem com fundo BRANCO OPACO -- o que
+        // importa, porque um QR precisa de fundo claro para ser lido e o tema escuro
+        // apagaria os modulos pretos se ele fosse transparente.
+        android.widget.LinearLayout.LayoutParams lp =
+            new android.widget.LinearLayout.LayoutParams(sz, sz);
+        lp.gravity = android.view.Gravity.CENTER_HORIZONTAL;
+        qr.setLayoutParams(lp);
+        col.addView(qr);
+
+        TextView dica = new TextView(this);
+        dica.setText(Lang.t("about.scan"));
+        dica.setTextSize(12);
+        dica.setGravity(android.view.Gravity.CENTER_HORIZONTAL);
+        dica.setPadding(0, Math.round(6 * dp), 0, 0);
+        col.addView(dica);
+
+        TextView link = new TextView(this);
+        link.setText(Branding.KOFI);
+        link.setGravity(android.view.Gravity.CENTER_HORIZONTAL);
+        link.setPadding(0, Math.round(6 * dp), 0, Math.round(4 * dp));
+        link.setTextColor(0xFF1F6FE8);
+        link.getPaint().setUnderlineText(true);
+        link.setOnClickListener(new View.OnClickListener(){
+            public void onClick(View v){
+                try {
+                    startActivity(new android.content.Intent(
+                        android.content.Intent.ACTION_VIEW,
+                        android.net.Uri.parse(Branding.KOFI)));
+                } catch(Throwable t){
+                    // sem navegador instalado: o endereco continua na tela para copiar
+                }
+            }
+        });
+        col.addView(link);
+
+        android.widget.ScrollView sv = new android.widget.ScrollView(this);
+        sv.addView(col);
+        return sv;
+    }
+
+    /** Barra de titulo do "Sobre": logo do wolphun + nome. */
+    private View tituloSobre(){
+        int pad = Math.round(16 * getResources().getDisplayMetrics().density);
+        android.widget.LinearLayout barra = new android.widget.LinearLayout(this);
+        barra.setOrientation(android.widget.LinearLayout.HORIZONTAL);
+        barra.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        barra.setPadding(pad, pad, pad, pad/2);
+
+        int sz = Math.round(44 * getResources().getDisplayMetrics().density);
+        android.widget.ImageView logo = new android.widget.ImageView(this);
+        logo.setImageResource(R.drawable.wolphun_logo);
+        logo.setLayoutParams(new android.widget.LinearLayout.LayoutParams(sz, sz));
+        barra.addView(logo);
+
+        TextView t = new TextView(this);
+        t.setText("wolphun emulator");
+        t.setTextSize(20);
+        t.setPadding(pad, 0, 0, 0);
+        t.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        barra.addView(t);
+        return barra;
     }
     private void showLanguagePicker(){
         int cur = 0;

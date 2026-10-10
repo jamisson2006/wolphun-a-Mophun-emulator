@@ -53,14 +53,16 @@ public final class GameSession {
         scr.targetFps = cfg.targetFps;
         scr.gamma = cfg.gamma;
         scr.setFontScale(cfg.fontScale);
-        vm  = new Pip2(exe, 4*1024*1024, 256*1024);
+        vm  = new Pip2(exe, (int)Math.max(4L*1024*1024, exe.heapBytesRequested()), 256*1024);
         sdk = new Sdk(vm, scr);
         sdk.soundEnabled = cfg.sound;
         sdk.soundFont    = cfg.soundFont;
         sdk.reverb       = cfg.reverb;
         sdk.deviceModel  = model;
         sdk.deviceVendor = Config.vendorForModel(model);
+        sdk.romDir  = mpnFile!=null? mpnFile.getAbsoluteFile().getParentFile() : null;   // .mpc companheiros
         sdk.saveDir = cfg.savesDir(gameName);
+        sdk.r3d.texFilterForce = cfg.texFilter;                  // FILTERMODE: 0=jogo 1=bilinear 2=nearest
         vm.sdk = sdk;
         vm.runConstructors();   // construtores globais C++ ("~C") antes do main (ex.: HC1 inicializa entidades/sprites)
     }

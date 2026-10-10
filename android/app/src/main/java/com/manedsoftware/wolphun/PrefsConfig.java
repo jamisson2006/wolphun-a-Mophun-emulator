@@ -13,6 +13,7 @@ public final class PrefsConfig {
     public int scale = 3;
     public boolean sound = true;
     public boolean reverb = true;    // false = mata o "eco"/reverb do MIDI
+    public boolean vibrate = true;   // vSysCtl(SYSCTL_SETVIBRATE) chega ao motor do aparelho
     public String soundFont = null;  // caminho .sf2 p/ o synth de SoundFont (null = synth padrao Sonivox)
     public int deviceModel = 2;      // default SE T610 (128x160)
     public int width = 128, height = 160;
@@ -20,6 +21,9 @@ public final class PrefsConfig {
     public double gamma = 1.0;
     public double fontScale = 1.0;   // escala do texto in-game (1.0=nativo; >1.0 aumenta legibilidade)
     public int renderScale = 1;      // supersampling interno (HD): 1=nativo; 2..4 = rende o 3D em N x (nitido)
+    // ---- filtro de textura 3D (VMGP3D_FILTERMODE, estado 13) ----
+    // 0 = segue o jogo; 1 = forca bilinear (suaviza); 2 = forca nearest (nitido, como o hardware).
+    public int texFilter = 0;
     public float screenTop = 0.66f;      // fração da altura (retrato) p/ a tela do jogo; resto = controles
     public String language = "en";       // idioma padrao da interface (Lang)
     // ---- aparencia (tema visual: cores + fonte) ----
@@ -86,12 +90,14 @@ public final class PrefsConfig {
         c.scale = p.getInt("scale", c.scale);
         c.sound = p.getBoolean("sound", c.sound);
         c.reverb = p.getBoolean("reverb", c.reverb);
+        c.vibrate = p.getBoolean("vibrate", c.vibrate);
         { String sf = p.getString("soundFont", ""); c.soundFont = (sf==null||sf.isEmpty())?null:sf; }
         c.deviceModel = p.getInt("deviceModel", c.deviceModel);
         c.width = p.getInt("width", c.width);
         c.height = p.getInt("height", c.height);
         c.targetFps = p.getInt("targetFps", c.targetFps);
         c.renderScale = p.getInt("renderScale", c.renderScale);
+        c.texFilter = p.getInt("texFilter", c.texFilter);
         c.gamma = (double) p.getFloat("gamma", (float)c.gamma);
         c.fontScale = (double) p.getFloat("fontScale", (float)c.fontScale);
         c.screenTop = p.getFloat("screenTop", c.screenTop);
@@ -107,8 +113,8 @@ public final class PrefsConfig {
     }
     public void save(Context ctx){
         SharedPreferences.Editor e = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit();
-        e.putInt("scale", scale).putBoolean("sound", sound).putBoolean("reverb", reverb).putInt("deviceModel", deviceModel)
-         .putInt("width", width).putInt("height", height).putInt("targetFps", targetFps).putInt("renderScale", renderScale)
+        e.putInt("scale", scale).putBoolean("sound", sound).putBoolean("reverb", reverb).putBoolean("vibrate", vibrate).putInt("deviceModel", deviceModel)
+         .putInt("width", width).putInt("height", height).putInt("targetFps", targetFps).putInt("renderScale", renderScale).putInt("texFilter", texFilter)
          .putFloat("gamma", (float)gamma).putFloat("fontScale", (float)fontScale).putFloat("screenTop", screenTop).putString("language", language)
          .putString("theme", theme).putInt("uiBg", uiBg).putInt("uiPanel", uiPanel).putInt("uiFg", uiFg).putInt("uiAccent", uiAccent)
          .putString("uiFont", uiFont).putFloat("uiFontScale", uiFontScale)
@@ -173,14 +179,56 @@ public final class PrefsConfig {
 
     // botões de tecla numérica 2/3 no teclado virtual (por jogo). Default: LIGADO p/ jogos cujo nome
     // sugere Bomb Jack (andam com '2'/'3'); DESLIGADO nos demais. Usuário pode alternar no menu do jogo.
+    // Jogos que nascem com o teclado numerico LIGADO. Criterio: medicao de entrada, nao palpite --
+    // o jogo tem de ser injogavel sem digitos. Bomb Jack anda com '2'/'3'; o Number Drop faz
+    // 7.323.007 chamadas a vScanKeys contra 2 de vGetButtonData (BUG-095, "needs the whole number
+    // keypad"). Outros leem digitos mas jogam bem no d-pad (SAAF, Brain Vita, Revs!, Ace, 4-in-1):
+    // esses ficam por conta do usuario, no toggle, p/ nao poluir a tela sem necessidade.
+    /**
+     * Jogos que precisam do TECLADO NUMERICO COMPLETO (12 teclas) ligado por padrao. O Bomb Jack saiu
+     * daqui: ele so usa '2'/'3' p/ andar, e esses dois botoes vem do walkKeys() -- a grade inteira
+     * tomava quase toda a tela e sobrava pouco espaco p/ o jogo.
+     */
     public static boolean defaultNumberKeys(String gameName){
+        String g = gameName==null ? "" : gameName.toLowerCase();
+        return g.contains("number") && g.contains("drop");   // 7,3 milhoes de vScanKeys: injogavel sem
+    }
+    /**
+     * Jogos em que as teclas '2'/'3' sao ANDAR esquerda/direita, e nao digito. Nesses o botao mostra
+     * o bonequinho andando; nos demais o teclado e numerico de verdade e o rotulo e o proprio digito.
+     */
+    public static boolean walkKeys(String gameName){
         String g = gameName==null ? "" : gameName.toLowerCase();
         return g.contains("bomb") && g.contains("jack");
     }
+    /** preset de layout do teclado virtual, por jogo (VirtualKeypad.LAY_*). 0 = automatico. */
+    public static int getLayoutPreset(Context ctx, String gameName){
+        return ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getInt("layout_"+safeKey(gameName), 0);
+    }
+    public static void setLayoutPreset(Context ctx, String gameName, int preset){
+        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putInt("layout_"+safeKey(gameName), preset).apply();
+    }
+
     public static boolean getNumberKeys(Context ctx, String gameName){
         return ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .getBoolean("numkeys_"+safeKey(gameName), defaultNumberKeys(gameName));
     }
+    /**
+     * Os botões de tecla do aparelho (203 voltar / 204 apagar) sao ligados por DETECCAO na ROM
+     * (wolphun.vm.KeyScan, no carregamento), nao por lista de nomes: aparecem so no jogo que
+     * realmente consulta aquele codigo. Esta preferencia e apenas o override manual do usuario.
+     */
+    public static boolean getPhoneKeys(Context ctx, String gameName, boolean detectado){
+        return ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getBoolean("phonekeys_"+safeKey(gameName), detectado);
+    }
+    public static void setPhoneKeys(Context ctx, String gameName, boolean on){
+        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putBoolean("phonekeys_"+safeKey(gameName), on).apply();
+    }
+
     public static void setNumberKeys(Context ctx, String gameName, boolean on){
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putBoolean("numkeys_"+safeKey(gameName), on).apply();

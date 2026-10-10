@@ -24,11 +24,12 @@ import java.util.HashMap;
  */
 public final class SettingsActivity extends AppCompatActivity {
     private PrefsConfig cfg;
-    private Switch soundSw, reverbSw;
+    private Switch soundSw, reverbSw, vibrateSw;
     private Button soundfontBtn;
-    private Spinner deviceSp;
+    private Spinner deviceSp, texFilterSp;
     private SeekBar gammaSb, fpsSb, screenSb, fontSb, hdSb;
     private TextView gammaLbl, fpsLbl, screenLbl, fontLbl, hdLbl;
+    private TextView texFilterLbl;
     // ---- aparencia (tema) ----
     private Spinner themeSpin, fontSpin;
     private SeekBar fontSizeBar;
@@ -48,6 +49,7 @@ public final class SettingsActivity extends AppCompatActivity {
 
         soundSw  = findViewById(R.id.sound);
         reverbSw = findViewById(R.id.reverb);
+        vibrateSw = findViewById(R.id.vibrate);
         deviceSp = findViewById(R.id.device);
         gammaSb  = findViewById(R.id.gamma);
         fpsSb    = findViewById(R.id.fps);
@@ -64,6 +66,8 @@ public final class SettingsActivity extends AppCompatActivity {
         soundSw.setChecked(cfg.sound);
         reverbSw.setText(Lang.t("m.reverb"));
         reverbSw.setChecked(cfg.reverb);
+        vibrateSw.setText(Lang.t("lbl.vibrate"));
+        vibrateSw.setChecked(cfg.vibrate);
 
         soundfontBtn = findViewById(R.id.soundfont);
         updateSoundfontBtn();
@@ -99,6 +103,16 @@ public final class SettingsActivity extends AppCompatActivity {
         hdSb.setProgress(Math.max(0, Math.min(3, cfg.renderScale-1)));
         hdSb.setOnSeekBarChangeListener(new Simple(){ public void onProgressChanged(SeekBar s,int p,boolean u){ updateHd(p); }});
         updateHd(hdSb.getProgress());
+
+        // filtro de textura 3D (estado 13 do SDK); quase nenhum jogo o define, dai a opcao de forcar
+        ((TextView)findViewById(R.id.deviceLabel)).setText(Lang.t("lbl.device"));   // faltava: ficava preso no texto do strings.xml
+        texFilterLbl = findViewById(R.id.texFilterLabel);
+        texFilterSp  = findViewById(R.id.texFilter);
+        texFilterLbl.setText(Lang.t("lbl.texfilter"));
+        texFilterSp.setAdapter(new ArrayAdapter<String>(this, android.R.layout.simple_spinner_dropdown_item,
+            new String[]{ Lang.t("tf.game"), Lang.t("tf.linear"), Lang.t("tf.nearest") }));
+        texFilterSp.setSelection(Math.max(0, Math.min(2, cfg.texFilter)));
+
 
         setupAppearance();
         Theme.apply(this, cfg);                          // aplica o tema salvo nesta tela
@@ -160,7 +174,7 @@ public final class SettingsActivity extends AppCompatActivity {
         }
         int cur = 0;
         for(int i=1;i<paths.size();i++) if(paths.get(i).equals(cfg.soundFont)) cur=i;
-        new AlertDialog.Builder(this)
+        AlertDialog dlg = new AlertDialog.Builder(this)
             .setTitle(Lang.t("m.soundfont"))
             .setSingleChoiceItems(names.toArray(new String[0]), cur, (d, which) -> {
                 cfg.soundFont = paths.get(which);          // null = padrao
@@ -171,7 +185,19 @@ public final class SettingsActivity extends AppCompatActivity {
             })
             .setNeutralButton(Lang.t("sf.folderhint"), null)
             .setNegativeButton(Lang.t("btn.cancel"), null)
-            .show();
+            .create();
+        dlg.show();
+        // O aviso "coloque os .sf2 em /sdcard/mophun/soundbanks" nao cabe num botao de dialogo e
+        // saia cortado em "...MOPHUN/S...". Botao de dialogo nao quebra linha, entao o texto passa a
+        // CORRER na horizontal (marquee em loop) e o caminho inteiro fica legivel.
+        android.widget.Button hint = dlg.getButton(AlertDialog.BUTTON_NEUTRAL);
+        if(hint!=null){
+            hint.setSingleLine(true);
+            hint.setHorizontallyScrolling(true);
+            hint.setEllipsize(android.text.TextUtils.TruncateAt.MARQUEE);
+            hint.setMarqueeRepeatLimit(-1);       // -1 = repete p/ sempre
+            hint.setSelected(true);               // sem isto o marquee nao anda
+        }
     }
 
     private void onThemePicked(int pos){
@@ -258,6 +284,7 @@ public final class SettingsActivity extends AppCompatActivity {
         super.onPause();
         cfg.sound = soundSw.isChecked();
         cfg.reverb = reverbSw.isChecked();
+        cfg.vibrate = vibrateSw.isChecked();
         cfg.deviceModel = deviceSp.getSelectedItemPosition();
         int[] r = PrefsConfig.resForModel(cfg.deviceModel);
         cfg.width = r[0]; cfg.height = r[1];
@@ -266,6 +293,7 @@ public final class SettingsActivity extends AppCompatActivity {
         cfg.screenTop = 0.50f + screenSb.getProgress()/100f;
         cfg.fontScale = 1.0 + fontSb.getProgress()/100.0;
         cfg.renderScale = 1 + hdSb.getProgress();
+        cfg.texFilter = texFilterSp.getSelectedItemPosition();
         cfg.save(this);
     }
 

@@ -1,0 +1,13 @@
+/* wolphun_caption.rss - nome visivel do app no alvo 8.1.
+ *
+ * No 9.x isso esta no wolphun_loc.rss (LOCALISABLE_APP_INFO). No 8.1 o recurso e outro,
+ * CAPTION_DATA, e vem de <apcaptionfile.rh>. O nome fica em ingles nos dois alvos: e a
+ * marca do programa, nao texto de interface (esse sim e traduzido, em WolphunLang).
+ */
+#include <apcaptionfile.rh>
+
+RESOURCE CAPTION_DATA
+    {
+    caption      = "wolphun";
+    shortcaption = "wolphun";
+    }

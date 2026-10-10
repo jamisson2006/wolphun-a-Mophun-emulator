@@ -1,5 +1,6 @@
 package com.manedsoftware.wolphun;
 
+import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
@@ -13,6 +14,7 @@ import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.Toast;
+import androidx.core.app.ActivityCompat;
 import java.io.File;
 import wolphun.vm.MidiBridge;
 
@@ -50,6 +52,8 @@ public final class EmulatorActivity extends Activity implements EmulatorView.Men
         view.setMenuListener(this);
         view.setScreenTopFraction(cfg.screenTop);   // sobe a tela do jogo (não fica atrás dos botões)
         view.importKeypad(PrefsConfig.getKeypad(this, gameName));   // layout de teclado customizado deste jogo
+        view.setWalkKeys(PrefsConfig.walkKeys(gameName));   // 2/3 = andar esq/dir (Bomb Jack)
+        view.setLayoutPreset(PrefsConfig.getLayoutPreset(this, gameName));
         view.setShowNumbers(PrefsConfig.getNumberKeys(this, gameName));   // botões 2/3 (default ON no Bomb Jack)
         view.setCanvasMenuVisible(false);           // usamos o BOTAO REAL abaixo (View garantida), nao o ≡ do canvas
 
@@ -100,6 +104,7 @@ public final class EmulatorActivity extends Activity implements EmulatorView.Men
 
         try {
             session = new GameSession(toRun, gameName, cfg, saveDir);
+            session.setContext(this);      // servicos do aparelho (vibracao)
             session.forceModel = PrefsConfig.getGameModel(this, gameName);   // resolucao por-jogo (menu da biblioteca)
             session.init();
             view.attach(session.getScreen());
@@ -107,6 +112,7 @@ public final class EmulatorActivity extends Activity implements EmulatorView.Men
             session.setEndListener(new GameSession.EndListener(){ public void onGameEnded(){
                 runOnUiThread(new Runnable(){ public void run(){ showGameEnded(); } });
             }});
+            applyPhoneKeys();   // botoes SAIR/APAGAR: so os codigos que esta ROM consulta
             session.start();
         } catch(Throwable t){
             // erro de container invalido/criptografado -> msg amigavel localizada (antes vazava
@@ -140,8 +146,13 @@ public final class EmulatorActivity extends Activity implements EmulatorView.Men
 
     private void showMenu(){
         final boolean numOn = PrefsConfig.getNumberKeys(this, gameName);
+        final boolean temPh = session!=null && !session.phoneKeysUsed().isEmpty();
+        final boolean phOn   = temPh && PrefsConfig.getPhoneKeys(this, gameName, true);
         final String[] items = { Lang.t("gw.savestate"), Lang.t("gw.loadstate"), Lang.t("gw.restart"),
-            Lang.t("gw.editkeys"), Lang.t("gw.numkeys")+(numOn?"  ✓":""), Lang.t("gw.close") };
+            Lang.t("gw.editkeys"), Lang.t("gw.layout")+"  –  "+layoutNames()[layoutAtual()],
+            Lang.t("gw.numkeys")+(numOn?"  ✓":""),
+            Lang.t("gw.phonekeys")+(temPh ? (phOn?"  ✓":"") : "  —"),
+            Lang.t("gw.screenshot"), Lang.t("gw.close") };
         new AlertDialog.Builder(this)
             .setTitle(gameName)
             .setItems(items, (d, which) -> {
@@ -150,8 +161,11 @@ public final class EmulatorActivity extends Activity implements EmulatorView.Men
                     case 1: doLoad(); break;
                     case 2: doRestart(); break;
                     case 3: enterEditMode(); break;
-                    case 4: toggleNumberKeys(); break;
-                    case 5: finish(); break;
+                    case 4: chooseLayout(); break;
+                    case 5: toggleNumberKeys(); break;
+                    case 6: togglePhoneKeys(); break;
+                    case 7: chooseScreenshot(); break;
+                    case 8: finish(); break;
                 }
             })
             .setNegativeButton(Lang.t("gw.resume"), null)   // listener null = fecha o menu e RETOMA o jogo (por isso "Resume", nao "Back to library")
@@ -164,6 +178,52 @@ public final class EmulatorActivity extends Activity implements EmulatorView.Men
         PrefsConfig.setNumberKeys(this, gameName, on);
         if(view!=null) view.setShowNumbers(on);
         toast(Lang.t("gw.numkeys")+": "+(on?"ON":"OFF"));
+    }
+
+    // ---- presets de layout do teclado virtual (estilo J2ME Loader) ----
+    private String[] layoutNames(){
+        return new String[]{ Lang.t("lay.auto"), Lang.t("lay.gamepad"), Lang.t("lay.phone"),
+            Lang.t("lay.numctrl"), Lang.t("lay.ctrlnum"), Lang.t("lay.numbers"),
+            Lang.t("lay.arrows"), Lang.t("lay.all") };
+    }
+    private int layoutAtual(){
+        int p = PrefsConfig.getLayoutPreset(this, gameName);
+        return (p>=0 && p<VirtualKeypad.LAY_COUNT) ? p : 0;
+    }
+    private void chooseLayout(){
+        new AlertDialog.Builder(this)
+            .setTitle(Lang.t("gw.layout"))
+            .setSingleChoiceItems(layoutNames(), layoutAtual(), (d, which) -> {
+                PrefsConfig.setLayoutPreset(this, gameName, which);
+                // trocar de preset só tem efeito visível se as posições fixadas na edição saírem do
+                // caminho -- senão o botão movido ignora o arranjo novo e o usuário acha que travou.
+                if(view!=null){ view.resetKeypad(); view.setLayoutPreset(which); }
+                PrefsConfig.setKeypad(this, gameName, null);
+                d.dismiss();
+                toast(layoutNames()[which]);
+            })
+            .setNegativeButton(Lang.t("btn.cancel"), null)
+            .show();
+    }
+
+    // liga/desliga os botões das teclas do aparelho C(204) / SAIR(203) -- por jogo e persistido
+    private void togglePhoneKeys(){
+        if(session==null || session.phoneKeysUsed().isEmpty()){
+            toast(Lang.t("gw.nophonekeys"));   // esta ROM nao le nenhuma tecla de aparelho
+            return;
+        }
+        boolean on = !PrefsConfig.getPhoneKeys(this, gameName, true);
+        PrefsConfig.setPhoneKeys(this, gameName, on);
+        applyPhoneKeys();
+        toast(Lang.t("gw.phonekeys")+": "+(on?"ON":"OFF"));
+    }
+
+    /** aplica a visibilidade dos botoes de tecla do aparelho a partir da DETECCAO + preferencia. */
+    private void applyPhoneKeys(){
+        if(view==null || session==null) return;
+        java.util.Set<Integer> usados = session.phoneKeysUsed();
+        if(usados.isEmpty() || !PrefsConfig.getPhoneKeys(this, gameName, true)) view.hidePhoneKeys();
+        else view.setPhoneKeys(usados);
     }
 
     // ---- modo de edição do teclado (mover/redimensionar botões, salvo por jogo) ----
@@ -185,6 +245,56 @@ public final class EmulatorActivity extends Activity implements EmulatorView.Men
             return;
         }
         super.onBackPressed();
+    }
+
+    // ---- captura de tela (sempre na RESOLUCAO DO APARELHO, nunca na do jogo) ----
+    private static final int REQ_WRITE = 77;
+    private Integer shotPendente;        // modo escolhido, esperando a permissao de escrita
+
+    private void chooseScreenshot(){
+        new AlertDialog.Builder(this)
+            .setTitle(Lang.t("gw.screenshot"))
+            .setItems(new String[]{ Lang.t("shot.game"), Lang.t("shot.full") },
+                      (d, which) -> takeScreenshot(which == 1))
+            .setNegativeButton(Lang.t("btn.cancel"), null)
+            .show();
+    }
+
+    private void takeScreenshot(final boolean comControles){
+        if(view == null) return;
+        // Android <= 9: sem a permissao a foto iria para a pasta privada (fora da Galeria).
+        // Pede e refaz a captura sozinho quando o usuario responde.
+        if(ScreenCapture.needsPermission(this)){
+            shotPendente = comControles ? 1 : 0;
+            ActivityCompat.requestPermissions(this,
+                new String[]{ Manifest.permission.WRITE_EXTERNAL_STORAGE }, REQ_WRITE);
+            return;
+        }
+        view.requestCapture(comControles, new EmulatorView.CaptureCallback(){
+            public void onCaptured(final android.graphics.Bitmap bmp){
+                if(bmp == null){ runOnUiThread(() -> toast(Lang.t("shot.notready"))); return; }
+                // comprimir PNG trava a thread de render: faz num worker.
+                new Thread(new Runnable(){ public void run(){
+                    final int w = bmp.getWidth(), h = bmp.getHeight();
+                    final String onde = ScreenCapture.save(EmulatorActivity.this, bmp, gameName);
+                    bmp.recycle();
+                    runOnUiThread(new Runnable(){ public void run(){
+                        if(onde == null) toast(Lang.t("shot.fail"));
+                        else Toast.makeText(EmulatorActivity.this,
+                                 Lang.t("shot.saved", w, h, onde), Toast.LENGTH_LONG).show();
+                    }});
+                }}, "wolphun-shot").start();
+            }
+        });
+    }
+
+    @Override public void onRequestPermissionsResult(int req, String[] perms, int[] res){
+        super.onRequestPermissionsResult(req, perms, res);
+        if(req != REQ_WRITE || shotPendente == null) return;
+        final int modo = shotPendente;
+        shotPendente = null;
+        // negada tambem segue: o ScreenCapture grava na pasta privada do app.
+        takeScreenshot(modo == 1);
     }
 
     private File stateFile(){ return new File(saveDir, "savestate.bin"); }

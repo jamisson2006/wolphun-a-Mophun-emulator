@@ -59,6 +59,47 @@ public final class Theme {
         return null;
     }
 
+    /** luminancia relativa (WCAG) de uma cor, 0..1 */
+    static double lum(Color c){
+        double[] v = new double[3];
+        int[] ch = { c.getRed(), c.getGreen(), c.getBlue() };
+        for(int i=0;i<3;i++){
+            double x = ch[i]/255.0;
+            v[i] = (x <= 0.03928) ? x/12.92 : Math.pow((x+0.055)/1.055, 2.4);
+        }
+        return 0.2126*v[0] + 0.7152*v[1] + 0.0722*v[2];
+    }
+    /** razao de contraste entre duas cores (WCAG): 1 = igual, 21 = preto sobre branco */
+    public static double contrastRatio(Color a, Color b){
+        double la = lum(a), lb = lum(b);
+        return (Math.max(la,lb) + 0.05) / (Math.min(la,lb) + 0.05);
+    }
+    /**
+     * Devolve 'fg' se ele for legivel sobre 'bg'; senao escurece/clareia ate passar de 4.5:1 (o
+     * minimo da WCAG p/ texto). Existe porque o Look&Feel do Windows pinta alguns paineis (o
+     * conteudo do seletor de arquivos, principalmente) com fundo BRANCO proprio, ignorando as
+     * chaves de cor do tema -- e ai um texto azul-claro como o do tema Ocean fica ilegivel.
+     */
+    /** true = respeita a cor escolhida ao pe da letra, mesmo ilegivel (opcao do usuario). */
+    public static boolean exactColors = false;
+
+    public static Color readable(Color fg, Color bg){
+        if(exactColors) return fg;
+        if(contrastRatio(fg, bg) >= 4.5) return fg;
+        boolean escurecer = lum(bg) > 0.35;              // fundo claro -> texto mais escuro
+        Color melhor = fg;
+        for(int i=1;i<=20;i++){
+            float f = i/20f;
+            Color alvo = escurecer ? Color.BLACK : Color.WHITE;
+            melhor = new Color(
+                Math.round(fg.getRed()   + (alvo.getRed()  -fg.getRed())  *f),
+                Math.round(fg.getGreen() + (alvo.getGreen()-fg.getGreen())*f),
+                Math.round(fg.getBlue()  + (alvo.getBlue() -fg.getBlue()) *f));
+            if(contrastRatio(melhor, bg) >= 4.5) return melhor;
+        }
+        return melhor;
+    }
+
     /** cor de texto legivel (preto/branco) sobre uma cor de fundo. */
     public static Color contrast(Color c){
         double l = 0.299*c.getRed() + 0.587*c.getGreen() + 0.114*c.getBlue();
@@ -101,10 +142,36 @@ public final class Theme {
         "RadioButtonMenuItem.foreground","PopupMenu.background","Separator.foreground",
         "Button.background","Button.foreground","ScrollPane.background","Viewport.background",
         "Spinner.background","Spinner.foreground","ToolTip.background","ToolTip.foreground",
+        "FileChooser.background","FileChooser.foreground","FileChooser.listViewBackground",
+        "FileChooser.listViewForeground","FileView.background","FileView.foreground",
+        "Tree.background","Tree.foreground","Tree.textBackground","Tree.textForeground",
+        "Tree.selectionBackground","Tree.selectionForeground",
+        "Table.background","Table.foreground","Table.selectionBackground","Table.selectionForeground",
+        "Table.gridColor","TableHeader.background","TableHeader.foreground",
+        "Panel.foreground","OptionPane.foreground","CheckBox.background","CheckBox.foreground",
+        "RadioButton.background","RadioButton.foreground","ToggleButton.background",
+        "ToggleButton.foreground","TitledBorder.titleColor","TabbedPane.background",
+        "TabbedPane.foreground","ScrollBar.background","ComboBox.buttonBackground",
+        "TextPane.background","TextPane.foreground","EditorPane.background","EditorPane.foreground",
     };
     static final String[] FONT_TYPES = {"Label","Button","ToggleButton","CheckBox","RadioButton","Menu","MenuItem",
         "CheckBoxMenuItem","RadioButtonMenuItem","MenuBar","List","ComboBox","TextField","TextArea",
         "Spinner","TabbedPane","OptionPane","Panel","ScrollPane","Viewport","ToolTip"};
+
+    /**
+     * Abre uma "janela" temporaria com as cores NATIVAS do sistema, para dialogos que o Look&Feel
+     * pinta por conta propria. O caso concreto e o JFileChooser do Windows: ele mantem a barra de
+     * cima, os atalhos da esquerda e os botoes CLAROS, ignorando as chaves de fundo do tema, mas
+     * herda `Label.foreground` -- entao o nome das pastas saia em azul-claro sobre branco.
+     * Tematizar so pela metade e pior que nao tematizar: aqui o seletor fica igual ao do sistema,
+     * legivel com qualquer tema. As janelas ja abertas nao mudam (as cores delas sao explicitas).
+     */
+    public static void pushNative(){ clearUIManager(); }
+    /** volta as chaves do tema depois do dialogo nativo. */
+    public static void popTheme(Config c){
+        Theme t = resolve(c);
+        if(t!=null) setUIManager(t, c.uiFont, c.uiFontSize);
+    }
 
     /** remove nossos overrides do UIManager (volta aos defaults do L&F). */
     public static void clearUIManager(){
@@ -115,11 +182,34 @@ public final class Theme {
     static void revertTree(Component c){
         if(!(c instanceof JComponent && Boolean.TRUE.equals(((JComponent)c).getClientProperty("themeSwatch")))){
             c.setBackground(null); c.setForeground(null); c.setFont(null);
+            // o opaque foi forcado por nos; o L&F nao o desfaz sozinho (installProperty respeita
+            // o que a aplicacao setou), entao devolvemos o padrao: item transparente, barra opaca
+            if(c instanceof JMenuItem || c instanceof JPopupMenu) ((JComponent)c).setOpaque(false);
             if(c instanceof JList){ ((JList<?>)c).setSelectionBackground(null); ((JList<?>)c).setSelectionForeground(null); }
         }
         if(c instanceof Container) for(Component ch : ((Container)c).getComponents()) revertTree(ch);
-        if(c instanceof JMenu) for(Component ch : ((JMenu)c).getMenuComponents()) revertTree(ch);
+        if(c instanceof JMenu){
+            revertTree(((JMenu)c).getPopupMenu());
+            for(Component ch : ((JMenu)c).getMenuComponents()) revertTree(ch);
+        }
         if(c instanceof JFrame){ JMenuBar mb=((JFrame)c).getJMenuBar(); if(mb!=null) revertTree(mb); }
+    }
+
+    /**
+     * O Look&Feel do Windows pinta JButton / JComboBox / JCheckBox / JRadioButton com a cor de
+     * controle do SISTEMA e simplesmente IGNORA o setBackground que pedimos. Resultado: o fundo
+     * ficava claro e a letra do tema (azul-claro no Ocean) sumia em cima dele. Para esses
+     * componentes o contraste tem de ser medido contra a cor que o L&F realmente usa.
+     */
+    static boolean lafPintaSozinho(){
+        LookAndFeel l = UIManager.getLookAndFeel();
+        return l!=null && "Windows".equals(l.getID());
+    }
+    /** cor de letra legivel para os componentes que o L&F pinta com o fundo do sistema */
+    public static Color fgControle(Color fg){
+        if(exactColors || !lafPintaSozinho()) return fg;
+        Color ctrl = UIManager.getColor("control");
+        return ctrl==null ? fg : readable(fg, ctrl);
     }
 
     /** chaves do UIManager -> os dialogos (JOptionPane/JFileChooser) novos ja nascem no tema. */
@@ -127,6 +217,7 @@ public final class Theme {
         if(t==null) return;
         Font f = new Font(fam, Font.PLAIN, size);
         Color selFg = contrast(t.accent);
+        Color fgCtl = fgControle(t.fg);        // p/ botoes/combos que o L&F pinta por conta propria
         Object[] kv = {
             "Panel.background", t.bg,
             "OptionPane.background", t.bg,
@@ -143,7 +234,7 @@ public final class Theme {
             "TextArea.background", t.panel,
             "TextArea.foreground", t.fg,
             "ComboBox.background", t.panel,
-            "ComboBox.foreground", t.fg,
+            "ComboBox.foreground", fgCtl,
             "ComboBox.selectionBackground", t.accent,
             "ComboBox.selectionForeground", selFg,
             "MenuBar.background", t.bg,
@@ -161,13 +252,53 @@ public final class Theme {
             "PopupMenu.background", t.bg,
             "Separator.foreground", t.panel,
             "Button.background", t.panel,
-            "Button.foreground", t.fg,
+            "Button.foreground", fgCtl,
             "ScrollPane.background", t.bg,
             "Viewport.background", t.panel,
             "Spinner.background", t.panel,
-            "Spinner.foreground", t.fg,
+            "Spinner.foreground", fgCtl,
             "ToolTip.background", t.panel,
             "ToolTip.foreground", t.fg,
+            // --- SELETOR DE ARQUIVOS/PASTAS. Sem estas chaves o L&F do Windows mantinha o painel
+            //     BRANCO e so herdava a cor da LETRA do tema: nome de pasta em azul-claro sobre
+            //     branco, ilegivel. Agora fundo e letra andam juntos.
+            "FileChooser.background", t.bg,
+            "FileChooser.foreground", t.fg,
+            "FileChooser.listViewBackground", t.panel,
+            "FileChooser.listViewForeground", t.fg,
+            "FileView.background", t.panel,
+            "FileView.foreground", t.fg,
+            "Tree.background", t.panel,
+            "Tree.foreground", t.fg,
+            "Tree.textBackground", t.panel,
+            "Tree.textForeground", t.fg,
+            "Tree.selectionBackground", t.accent,
+            "Tree.selectionForeground", selFg,
+            "Table.background", t.panel,
+            "Table.foreground", t.fg,
+            "Table.selectionBackground", t.accent,
+            "Table.selectionForeground", selFg,
+            "Table.gridColor", t.bg,
+            "TableHeader.background", t.bg,
+            "TableHeader.foreground", t.fg,
+            // --- rotulos que passavam batido e ficavam com a cor do sistema
+            "Panel.foreground", t.fg,
+            "OptionPane.foreground", t.fg,
+            "CheckBox.background", t.bg,
+            "CheckBox.foreground", fgCtl,
+            "RadioButton.background", t.bg,
+            "RadioButton.foreground", fgCtl,
+            "ToggleButton.background", t.panel,
+            "ToggleButton.foreground", fgCtl,
+            "TitledBorder.titleColor", t.fg,
+            "TabbedPane.background", t.bg,
+            "TabbedPane.foreground", t.fg,
+            "ScrollBar.background", t.bg,
+            "ComboBox.buttonBackground", t.panel,
+            "TextPane.background", t.panel,
+            "TextPane.foreground", t.fg,
+            "EditorPane.background", t.panel,
+            "EditorPane.foreground", t.fg,
         };
         for(int i=0;i<kv.length;i+=2) UIManager.put(kv[i], kv[i+1]);
         // fonte de todos os tipos de componente
@@ -182,28 +313,54 @@ public final class Theme {
         Font f = new Font(fam, Font.PLAIN, size);
         applyOne(c, t, f);
         if(c instanceof Container) for(Component ch : ((Container)c).getComponents()) applyTree(ch, t, fam, size);
-        if(c instanceof JMenu) for(Component ch : ((JMenu)c).getMenuComponents()) applyTree(ch, t, fam, size);
+        if(c instanceof JMenu){
+            applyTree(((JMenu)c).getPopupMenu(), t, fam, size);      // o fundo do popup tambem
+            for(Component ch : ((JMenu)c).getMenuComponents()) applyTree(ch, t, fam, size);
+        }
         if(c instanceof JFrame){ JMenuBar mb=((JFrame)c).getJMenuBar(); if(mb!=null) applyTree(mb, t, fam, size); }
     }
+    /**
+     * Rede de seguranca contra fundo que nao e nosso: alguns paineis do L&F nativo (o conteudo do
+     * JFileChooser em especial) se pintam de branco ignorando as chaves do tema. Se a letra do tema
+     * nao for legivel sobre o fundo que o componente REALMENTE tem, usa um tom ajustado.
+     */
+    static void fgLegivel(Component c, Color fg){
+        Color bg = c.getBackground();
+        c.setForeground(bg==null ? fg : readable(fg, bg));
+    }
+
     static void applyOne(Component c, Theme t, Font f){
         c.setFont(f);
         // swatches de cor (Aparencia) tem sua propria cor fixa — nao re-tematizar (senao some o texto/cor)
         if(c instanceof JComponent && Boolean.TRUE.equals(((JComponent)c).getClientProperty("themeSwatch"))) return;
         Color selFg = contrast(t.accent);
         if(c instanceof JLabel){
-            c.setForeground(t.fg);
+            fgLegivel(c, t.fg);
         } else if(c instanceof JList){
-            c.setBackground(t.panel); c.setForeground(t.fg);
+            c.setBackground(t.panel); fgLegivel(c, t.fg);
             ((JList<?>)c).setSelectionBackground(t.accent); ((JList<?>)c).setSelectionForeground(selFg);
         } else if(c instanceof JTextField || c instanceof JTextArea){
-            c.setBackground(t.panel); c.setForeground(t.fg);
+            c.setBackground(t.panel); fgLegivel(c, t.fg);
             if(c instanceof JTextField) ((JTextField)c).setCaretColor(t.fg);
         } else if(c instanceof JComboBox){
-            c.setBackground(t.panel); c.setForeground(t.fg);
+            c.setBackground(t.panel); c.setForeground(fgControle(t.fg));
         } else if(c instanceof JButton){
-            c.setBackground(t.panel); c.setForeground(t.fg);
-        } else if(c instanceof JMenuBar || c instanceof JMenu || c instanceof JMenuItem){
+            c.setBackground(t.panel); c.setForeground(fgControle(t.fg));
+        } else if(c instanceof JMenuBar || c instanceof JMenu || c instanceof JMenuItem
+               || c instanceof JPopupMenu){
+            // O L&F do Windows deixa os itens de menu NAO-OPACOS e pinta o popup de #F0F0F0 por
+            // conta propria; so a cor da LETRA vinha do tema -> azul-claro sobre branco, ilegivel.
+            // Forcando opaque o item passa a pintar o fundo do tema e o menu inteiro fica coerente.
+            ((JComponent)c).setOpaque(true);
             c.setBackground(t.bg); c.setForeground(t.fg);
+        } else if(c instanceof JTree){
+            c.setBackground(t.panel); fgLegivel(c, t.fg);
+        } else if(c instanceof JTable){
+            c.setBackground(t.panel); c.setForeground(t.fg);
+            ((JTable)c).setSelectionBackground(t.accent); ((JTable)c).setSelectionForeground(selFg);
+            ((JTable)c).setGridColor(t.bg);
+        } else if(c instanceof JCheckBox || c instanceof JRadioButton){
+            c.setBackground(t.bg); c.setForeground(fgControle(t.fg));
         } else if(c instanceof JViewport){
             c.setBackground(t.panel);
         } else if(c instanceof JPanel || c instanceof JScrollPane || c instanceof JRootPane){

@@ -1,15 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- values/ e o fallback de TODOS os idiomas: o texto aqui tem de ser INGLES.
+     Antes estava em portugues, e por isso "Modelo do aparelho" aparecia no meio de uma
+     interface em ingles. Os rotulos visiveis sao sobrescritos em runtime pelo Lang
+     (6 idiomas); o que fica aqui e apenas o valor inicial do layout e o que o Android
+     precisa fora do runtime (app_name no manifest, titulo do item de menu). -->
 <resources>
     <string name="app_name">wolphun emulator</string>
-    <string name="menu_settings">Configurações</string>
-    <string name="add_rom">Adicionar ROM</string>
-    <string name="library_empty">Nenhuma ROM encontrada.\n\nCopie seus arquivos .mpn para:\nAndroid/data/com.manedsoftware.wolphun/files/roms/</string>
-    <string name="settings_scale">Escala de vídeo</string>
-    <string name="settings_sound">Som</string>
-    <string name="settings_device">Modelo do aparelho</string>
-    <string name="settings_gamma">Brilho (gamma)</string>
-    <string name="save_state">Salvar estado</string>
-    <string name="load_state">Carregar estado</string>
-    <string name="restart">Reiniciar</string>
-    <string name="close">Fechar</string>
+    <string name="menu_settings">Settings</string>
+    <string name="add_rom">Add ROM</string>
+    <string name="library_empty">No ROMs found.</string>
+    <string name="settings_sound">Sound</string>
+    <string name="settings_device">Device model:</string>
 </resources>

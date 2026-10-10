@@ -3,7 +3,13 @@
     package="com.manedsoftware.wolphun">
 
     <!-- ler ROMs de uma pasta compartilhada (/sdcard/mophun) que sobrevive a reinstalações -->
+    <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+
+    <!-- gravar as capturas de tela em /sdcard/Pictures/wolphun. Do Android 10 (29) em diante
+         isso passa pelo MediaStore e NAO precisa de permissao nenhuma -> maxSdkVersion. -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
 
     <application
         android:allowBackup="true"

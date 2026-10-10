@@ -1,0 +1,373 @@
+/* wolphun.rss - recursos de UI do emulador (S60 3rd Edition / Avkon).
+ *
+ * A softkey ESQUERDA e "Opcoes" (R_AVKON_SOFTKEYS_OPTIONS_EXIT): ao apertar, o Avkon
+ * abre este menu com a aparencia NATIVA do sistema. Todas as configuracoes sao listas
+ * do proprio sistema (menu pane + setting page de radio), nenhuma UI desenhada a mao.
+ */
+NAME WLPH
+
+#include <eikon.rh>
+#include <avkon.rh>
+#include <avkon.rsg>
+#include <avkon.mbg>
+#include <appinfo.rh>
+#include <CommonDialogs.rh>     /* navegador de arquivos NATIVO do sistema */
+#include <CommonDialogs.hrh>
+#include "wolphun.hrh"
+
+RESOURCE RSS_SIGNATURE { }
+
+RESOURCE TBUF r_default_document_name { buf = ""; }
+
+RESOURCE EIK_APP_INFO
+{
+    menubar = r_wolphun_menubar;
+    cba     = R_AVKON_SOFTKEYS_OPTIONS_EXIT;
+}
+
+/* ---------------- menu da softkey esquerda ---------------- */
+RESOURCE MENU_BAR r_wolphun_menubar
+{
+    titles =
+    {
+        MENU_TITLE { menu_pane = r_wolphun_menu; }
+    };
+}
+
+RESOURCE MENU_PANE r_wolphun_menu
+{
+    items =
+    {
+        MENU_ITEM { command = EWolphunCmdOpenRom;    txt = "Open game"; },
+        MENU_ITEM { command = EWolphunCmdBrowseFile; txt = "Browse file..."; },
+        MENU_ITEM { command = EWolphunCmdFolders;    txt = "Game folders";
+                    cascade = r_wolphun_folders_menu; },
+        MENU_ITEM { command = EWolphunCmdRestart;  txt = "Restart game"; },
+        MENU_ITEM { command = EWolphunCmdCloseRom; txt = "Close game"; },
+        MENU_ITEM { command = EWolphunCmdSettings; txt = "Settings";
+                    cascade = r_wolphun_settings_menu; },
+        MENU_ITEM { command = EWolphunCmdAbout;    txt = "About"; },
+        MENU_ITEM { command = EAknSoftkeyExit;     txt = "Exit"; }
+    };
+}
+
+/* Submenu das pastas de jogos: o usuario cadastra quantas quiser (bulk) e o
+   "Open game" varre TODAS de uma vez. */
+RESOURCE MENU_PANE r_wolphun_folders_menu
+{
+    items =
+    {
+        MENU_ITEM { command = EWolphunCmdAddFolder;    txt = "Add folder..."; },
+        MENU_ITEM { command = EWolphunCmdRemoveFolder; txt = "Remove folder..."; }
+    };
+}
+
+/* Submenu de configuracoes - cada item abre uma LISTA nativa do sistema */
+RESOURCE MENU_PANE r_wolphun_settings_menu
+{
+    items =
+    {
+        MENU_ITEM { command = EWolphunCmdSetResolution; txt = "Game resolution"; },
+        MENU_ITEM { command = EWolphunCmdSetScaling;    txt = "Screen fit"; },
+        MENU_ITEM { command = EWolphunCmdSetKeyProfile; txt = "Controls"; },
+        MENU_ITEM { command = EWolphunCmdEditKeys;     txt = "Edit keys"; },
+        MENU_ITEM { command = EWolphunCmdSetSound;      txt = "Sound"; },
+        MENU_ITEM { command = EWolphunCmdSetTexFilter;  txt = "Texture filter (3D)"; },
+        MENU_ITEM { command = EWolphunCmdSetPowerSave;  txt = "Battery saving"; },
+        MENU_ITEM { command = EWolphunCmdSetLanguage;   txt = "Language"; },
+        MENU_ITEM { command = EWolphunCmdFullscreen;    txt = "Fullscreen"; },
+        MENU_ITEM { command = EWolphunCmdSetFullKey;    txt = "Fullscreen key"; },
+        MENU_ITEM { command = EWolphunCmdSetVibrate;    txt = "Vibration"; }
+    };
+}
+
+/* ---------------- textos das listas de configuracao ----------------
+   Cada array vira uma lista de radio-botoes do proprio sistema (CAknRadioButtonSettingPage).
+   O formato "<indice>\ttexto" e o exigido pelo Avkon para itens de lista simples. */
+
+/* Array de reserva das listas dinamicas (jogos / pastas): o LISTBOX exige um array_id
+   valido, e o conteudo real entra por SetItemTextArray antes do dialogo ser desenhado. */
+RESOURCE ARRAY r_wolphun_empty_items
+{
+    items = { LBUF { txt = ""; } };
+}
+
+RESOURCE ARRAY r_wolphun_resolution_items
+{
+    items =
+    {
+        LBUF { txt = "101x80  (SE T300)"; },
+        LBUF { txt = "128x160 (SE T610)"; },
+        LBUF { txt = "176x208 (Nokia S60)"; },
+        LBUF { txt = "176x220 (Sendo X)"; },
+        LBUF { txt = "208x320 (SE P800)"; },
+        LBUF { txt = "240x320 (QVGA portrait)"; },
+        LBUF { txt = "320x240 (QVGA landscape)"; },
+        LBUF { txt = "Automatic (by game)"; }
+    };
+}
+
+RESOURCE ARRAY r_wolphun_scaling_items
+{
+    items =
+    {
+        LBUF { txt = "Centred (1:1)"; },
+        LBUF { txt = "Scale keeping aspect"; },
+        LBUF { txt = "Fill the screen"; }
+    };
+}
+
+RESOURCE ARRAY r_wolphun_keyprofile_items
+{
+    items =
+    {
+        LBUF { txt = "Automatic"; },
+        LBUF { txt = "QWERTY (E-series)"; },
+        LBUF { txt = "Numeric keypad"; },
+        LBUF { txt = "Joystick only"; },
+        LBUF { txt = "Custom"; }
+    };
+}
+
+RESOURCE ARRAY r_wolphun_onoff_items
+{
+    items =
+    {
+        LBUF { txt = "Off"; },
+        LBUF { txt = "On"; }
+    };
+}
+
+RESOURCE ARRAY r_wolphun_texfilter_items
+{
+    items =
+    {
+        LBUF { txt = "Follow the game"; },
+        LBUF { txt = "Bilinear (smooth)"; },
+        LBUF { txt = "Nearest (sharp)"; }
+    };
+}
+
+RESOURCE ARRAY r_wolphun_powersave_items
+{
+    items =
+    {
+        LBUF { txt = "Maximum (CPU 25%, 20 fps)"; },
+        LBUF { txt = "High (CPU 40%, 25 fps)"; },
+        LBUF { txt = "Medium (CPU 50%, 30 fps)"; },
+        LBUF { txt = "Off (no limit)"; }
+    };
+}
+
+/* ---------------- titulos ---------------- */
+RESOURCE TBUF r_wolphun_title_resolution { buf = "Game resolution"; }
+RESOURCE TBUF r_wolphun_title_scaling    { buf = "Screen fit"; }
+RESOURCE TBUF r_wolphun_title_keyprofile { buf = "Controls"; }
+RESOURCE TBUF r_wolphun_title_sound      { buf = "Sound"; }
+RESOURCE TBUF r_wolphun_title_texfilter  { buf = "Texture filter"; }
+RESOURCE TBUF r_wolphun_title_games      { buf = "Choose the game"; }
+
+RESOURCE TBUF r_wolphun_title_folders { buf = "Remove which folder?"; }
+RESOURCE TBUF r_wolphun_no_games    { buf = "No .mpn in the registered folders"; }
+RESOURCE TBUF r_wolphun_folder_added   { buf = "Folder added"; }
+RESOURCE TBUF r_wolphun_folder_dup     { buf = "That folder was already in the list"; }
+RESOURCE TBUF r_wolphun_no_folders     { buf = "No folders registered"; }
+RESOURCE TBUF r_wolphun_browse_title   { buf = "Choose an .mpn file"; }
+RESOURCE TBUF r_wolphun_addfolder_title{ buf = "Choose an .mpn from the folder to register"; }
+RESOURCE TBUF r_wolphun_no_game_now { buf = "No game open"; }
+RESOURCE TBUF r_wolphun_key_press   { buf = "Press the key you want (the same key removes it)"; }
+RESOURCE TBUF r_wolphun_key_set     { buf = "Key saved - profile switched to Custom"; }
+RESOURCE TBUF r_wolphun_key_removed { buf = "Key removed"; }
+RESOURCE TBUF r_wolphun_key_full    { buf = "That action already has 3 keys: remove one first"; }
+RESOURCE TBUF r_wolphun_restart_res { buf = "Resolution changed: the game will restart"; }
+RESOURCE TBUF r_wolphun_about_txt
+{
+    buf = "wolphun emulator\nMophun emulator (PIP2 VM)\nby Jamisson Tavares\nSymbian S60 port";
+}
+
+/* ---------------- navegador de arquivos NATIVO ----------------
+   O AknCommonDialogs mostra primeiro a escolha de memoria (telefone / cartao) e
+   depois o navegador de pastas do proprio sistema -- o mesmo do Gestor de
+   Arquivos do aparelho. */
+RESOURCE MEMORYSELECTIONDIALOG r_wolphun_memory_selection
+{
+    title     = "Look in:";
+    softkey_1 = "Select";
+    softkey_2 = "Cancel";
+    locations =
+    {
+        LOCATION { root_path = "C:\\"; },
+        LOCATION { root_path = "E:\\"; }
+    };
+}
+
+/* Navegador de arquivos: titulo + FILTRO declarativo (.mpn). O filtro inclusivo faz o
+   dialogo mostrar so as pastas e os arquivos .mpn -- sem ele o usuario veria o cartao
+   de memoria inteiro. */
+RESOURCE FILESELECTIONDIALOG r_wolphun_file_selection
+{
+    title                 = "Choose an .mpn file";
+    softkey_1_file        = "Open";
+    softkey_1_folder      = "Open";
+    softkey_2_root_level  = "Cancel";
+    softkey_2_subfolder   = "Back";
+    filters =
+    {
+        FILTER
+        {
+            filter_type  = EFilenameFilter;
+            filter_style = EInclusiveFilter;
+            filter_data  = { "*.mpn" };
+        }
+    };
+}
+
+/* ---------------- lista de pastas cadastradas ---------------- */
+RESOURCE DIALOG r_wolphun_keys_list
+{
+    flags   = EGeneralQueryFlags;
+    buttons = R_AVKON_SOFTKEYS_SELECT_CANCEL;
+    items =
+    {
+        DLG_LINE
+        {
+            type = EAknCtListQueryControl;
+            id   = EListQueryControl;
+            control = AVKON_LIST_QUERY_CONTROL
+            {
+                listtype = EAknCtSinglePopupMenuListBox;
+                listbox = LISTBOX { flags = EAknListBoxSelectionList; array_id = r_wolphun_empty_items; };
+                heading  = "Edit keys";
+            };
+        }
+    };
+}
+
+RESOURCE DIALOG r_wolphun_folder_list
+{
+    flags   = EGeneralQueryFlags;
+    buttons = R_AVKON_SOFTKEYS_SELECT_CANCEL;
+    items =
+    {
+        DLG_LINE
+        {
+            type = EAknCtListQueryControl;
+            id   = EListQueryControl;
+            control = AVKON_LIST_QUERY_CONTROL
+            {
+                listtype = EAknCtSinglePopupMenuListBox;
+                listbox = LISTBOX { flags = EAknListBoxSelectionList; array_id = r_wolphun_empty_items; };
+                heading  = "Game folders";
+            };
+        }
+    };
+}
+
+/* ---------------- listas de configuracao ----------------
+   Uma lista de consulta nativa por configuracao. (Antes isto usava
+   CAknRadioButtonSettingPage com R_AVKON_DEFAULT_SETTING_PAGE -- mas esse recurso tem
+   type=0xffff e editor_resource_id=0, ou seja NAO e uma pagina com listbox, e o
+   aplicativo fechava ao abrir. A lista de consulta e o mesmo widget da lista de jogos:
+   simples, nativo e confirmado com a tecla do meio.) */
+RESOURCE DIALOG r_wolphun_choice_resolution
+{
+    flags = EGeneralQueryFlags;
+    buttons = R_AVKON_SOFTKEYS_OK_CANCEL;
+    items =
+    {
+        DLG_LINE { type = EAknCtListQueryControl; id = EListQueryControl;
+            control = AVKON_LIST_QUERY_CONTROL
+            { listtype = EAknCtSinglePopupMenuListBox; listbox = LISTBOX { flags = EAknListBoxSelectionList; array_id = r_wolphun_resolution_items; }; heading = "Game resolution"; }; }
+    };
+}
+RESOURCE DIALOG r_wolphun_choice_scaling
+{
+    flags = EGeneralQueryFlags;
+    buttons = R_AVKON_SOFTKEYS_OK_CANCEL;
+    items =
+    {
+        DLG_LINE { type = EAknCtListQueryControl; id = EListQueryControl;
+            control = AVKON_LIST_QUERY_CONTROL
+            { listtype = EAknCtSinglePopupMenuListBox; listbox = LISTBOX { flags = EAknListBoxSelectionList; array_id = r_wolphun_scaling_items; }; heading = "Screen fit"; }; }
+    };
+}
+RESOURCE DIALOG r_wolphun_choice_keyprofile
+{
+    flags = EGeneralQueryFlags;
+    buttons = R_AVKON_SOFTKEYS_OK_CANCEL;
+    items =
+    {
+        DLG_LINE { type = EAknCtListQueryControl; id = EListQueryControl;
+            control = AVKON_LIST_QUERY_CONTROL
+            { listtype = EAknCtSinglePopupMenuListBox; listbox = LISTBOX { flags = EAknListBoxSelectionList; array_id = r_wolphun_keyprofile_items; }; heading = "Controls"; }; }
+    };
+}
+RESOURCE DIALOG r_wolphun_choice_sound
+{
+    flags = EGeneralQueryFlags;
+    buttons = R_AVKON_SOFTKEYS_OK_CANCEL;
+    items =
+    {
+        DLG_LINE { type = EAknCtListQueryControl; id = EListQueryControl;
+            control = AVKON_LIST_QUERY_CONTROL
+            { listtype = EAknCtSinglePopupMenuListBox; listbox = LISTBOX { flags = EAknListBoxSelectionList; array_id = r_wolphun_onoff_items; }; heading = "Sound"; }; }
+    };
+}
+RESOURCE DIALOG r_wolphun_choice_texfilter
+{
+    flags = EGeneralQueryFlags;
+    buttons = R_AVKON_SOFTKEYS_OK_CANCEL;
+    items =
+    {
+        DLG_LINE { type = EAknCtListQueryControl; id = EListQueryControl;
+            control = AVKON_LIST_QUERY_CONTROL
+            { listtype = EAknCtSinglePopupMenuListBox; listbox = LISTBOX { flags = EAknListBoxSelectionList; array_id = r_wolphun_texfilter_items; }; heading = "Texture filter"; }; }
+    };
+}
+RESOURCE DIALOG r_wolphun_choice_powersave
+{
+    flags = EGeneralQueryFlags;
+    buttons = R_AVKON_SOFTKEYS_OK_CANCEL;
+    items =
+    {
+        DLG_LINE { type = EAknCtListQueryControl; id = EListQueryControl;
+            control = AVKON_LIST_QUERY_CONTROL
+            { listtype = EAknCtSinglePopupMenuListBox; listbox = LISTBOX { flags = EAknListBoxSelectionList; array_id = r_wolphun_powersave_items; }; heading = "Battery saving"; }; }
+    };
+}
+
+/* Dialogo de escolha GENERICO: os itens e o titulo entram em tempo de execucao, no
+   idioma escolhido (ver CWolphunAppUi::ShowChoiceT). As listas fixas em recurso acima
+   ficaram so como reserva -- quem manda agora e a tabela de idiomas. */
+RESOURCE DIALOG r_wolphun_choice_generic
+{
+    flags = EGeneralQueryFlags;
+    buttons = R_AVKON_SOFTKEYS_OK_CANCEL;
+    items =
+    {
+        DLG_LINE { type = EAknCtListQueryControl; id = EListQueryControl;
+            control = AVKON_LIST_QUERY_CONTROL
+            { listtype = EAknCtSinglePopupMenuListBox; listbox = LISTBOX { flags = EAknListBoxSelectionList; array_id = r_wolphun_empty_items; }; heading = " "; }; }
+    };
+}
+
+/* ---------------- lista de jogos (dialogo de consulta nativo) ---------------- */
+RESOURCE DIALOG r_wolphun_game_list
+{
+    flags   = EGeneralQueryFlags;
+    buttons = R_AVKON_SOFTKEYS_SELECT_CANCEL;
+    items =
+    {
+        DLG_LINE
+        {
+            type = EAknCtListQueryControl;
+            id   = EListQueryControl;
+            control = AVKON_LIST_QUERY_CONTROL
+            {
+                listtype = EAknCtSinglePopupMenuListBox;
+                listbox = LISTBOX { flags = EAknListBoxSelectionList; array_id = r_wolphun_empty_items; };
+                heading  = "Choose the game";
+            };
+        }
+    };
+}

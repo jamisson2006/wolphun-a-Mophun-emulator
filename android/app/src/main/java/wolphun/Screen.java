@@ -88,9 +88,9 @@ public final class Screen {
     // teclas do KEYPAD NUMERICO literais (ASCII '0'..'9','*','#'), lidas por vTestKey/vScanKeys.
     // Jogos como Bomb Jack NAO tratam os numeros como d-pad — usam teclas numericas proprias p/ mover.
     // O teclado virtual pode chamar setKeypad(ascii,down) p/ botoes numericos dedicados.
-    public final boolean[] keypadDown = new boolean[128];
-    public void setKeypad(int ascii, boolean down){ if(ascii>=0 && ascii<128) keypadDown[ascii]=down; }
-    public boolean keypadPressed(int ascii){ return ascii>=0 && ascii<128 && keypadDown[ascii]; }
+    public final boolean[] keypadDown = new boolean[256];   // 0..127 ASCII + 200..217 teclas do aparelho
+    public void setKeypad(int ascii, boolean down){ if(ascii>=0 && ascii<256) keypadDown[ascii]=down; }
+    public boolean keypadPressed(int ascii){ return ascii>=0 && ascii<256 && keypadDown[ascii]; }
 
     // ---- clip ----
     public void setClip(int x0,int y0,int x1,int y1){
@@ -165,10 +165,24 @@ public final class Screen {
         if((flags&1)!=0) style |= android.graphics.Typeface.ITALIC;
         android.graphics.Typeface base = (flags&8)!=0 ? android.graphics.Typeface.MONOSPACE : android.graphics.Typeface.DEFAULT;
         textPaint.setTypeface(android.graphics.Typeface.create(base, style));
-        textPaint.setTextSize(px);
+        // 'px' e a ALTURA da fonte em pixels (vmgp.h: FONT_SIZE_PIXELS(n) = "font height in pixels"), mas
+        // setTextSize recebe o EM SIZE e a caixa (descent-ascent) sai bem maior. Passar px direto inflava a
+        // altura de linha ~30%: o vTextExtent devolvia altura demais e os jogos que MONTAM O LAYOUT com ele
+        // estouravam (Erix perdia o item "Quit" fora da tela; o menu do Hugo Evil Mirror cortava um item).
+        // Casamos a CAIXA VISIVEL (ascent+descent) com px.
+        float em = px;
+        for(; em > 4f; em -= 1f){
+            textPaint.setTextSize(em);
+            // A caixa INTEIRA (ascent+descent) tem de caber em px: a fonte bitmap do aparelho poe
+            // ascendente E descendente dentro da celula. Casar so o ascent deixava o glifo mais alto que a
+            // celula e o rabo do 'p'/'y' invadia a linha de baixo.
+            Paint.FontMetrics t = textPaint.getFontMetrics();
+            if(t.descent - t.ascent <= px) break;
+        }
+        textPaint.setTextSize(em);
         Paint.FontMetrics m = textPaint.getFontMetrics();
         baseline = -m.ascent + 1;
-        lineHeight = (int)Math.ceil(m.descent - m.ascent);
+        lineHeight = px;   // vTextExtent devolve a altura PEDIDA, nao a caixa da Paint
     }
     public int textWidth(String s){ return (s==null||s.isEmpty())?0:(int)Math.ceil(textPaint.measureText(s)); }
     public int fontHeight(){ return lineHeight; }

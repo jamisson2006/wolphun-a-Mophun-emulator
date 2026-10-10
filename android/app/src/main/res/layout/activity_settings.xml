@@ -27,6 +27,15 @@
             android:paddingTop="8dp"
             android:paddingBottom="8dp" />
 
+        <Switch
+            android:id="@+id/vibrate"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Vibration"
+            android:textSize="16sp"
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp" />
+
         <Button
             android:id="@+id/soundfont"
             android:layout_width="match_parent"
@@ -125,6 +134,7 @@
         </LinearLayout>
 
         <TextView
+            android:id="@+id/deviceLabel"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="@string/settings_device"
@@ -195,5 +205,18 @@
             android:id="@+id/hdScale"
             android:layout_width="match_parent"
             android:layout_height="wrap_content" />
+
+        <TextView
+            android:id="@+id/texFilterLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="16sp"
+            android:paddingTop="16dp" />
+
+        <Spinner
+            android:id="@+id/texFilter"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content" />
+
     </LinearLayout>
 </ScrollView>

@@ -9,11 +9,31 @@ import java.util.*;
  * Subconjunto essencial implementado; o resto e logado (para irmos completando).
  */
 public final class Sdk {
+    // Sprites RGB332 (fmt7): indice 0 e PRETO OPACO, nao transparente. O SDK e explicito — a
+    // transparencia 2D vem do TRANSFER MODE, nao do formato: vmgp.h "MODE_TRANS(1): Transparent copy
+    // mode, color 0 is treated as transparent"; e VCAPS_RGB332 e "direct color" (sem canal alpha).
+    // Ja forcamos fmt7 sempre transparente (workaround p/ um quadrado preto no ceu do HC2) e isso
+    // furava os fundos DITHERED que usam preto como uma das 2 cores — os pixels do dither nao eram
+    // escritos e o frame ANTERIOR vazava = "smearing entre os pixels" (Joe's Treasure Quest: 13,5% da
+    // area 3D ficava sem redesenhar; sem o workaround: 0,0%). Hoje a regra e POR JOGO: detectaFmt7Transp()
+    // liga o recorte so no HC2, que precisa dele. Escape manual: FMT7TRANSP=1 / FMT7TRANSP=0.
     final Pip2 vm; final Screen scr;
     long tick0 = System.currentTimeMillis();
-    public long virtualTick = -1;   // >=0: tempo virtual (avança virtualTickStep ms a cada vGetTickCount)
-    public long virtualTickStep = 1;
+    // VTICK=<passo>: tempo VIRTUAL (avanca <passo> ms por vGetTickCount). Headless roda muito mais
+    // rapido que o relogio real, entao intros presas em while(vGetTickCount()<alvo) queimavam dezenas
+    // de milhoes de instrucoes so esperando. So para teste: muda o ritmo do jogo.
+    public long virtualTick = System.getenv("VTICK")!=null ? 0 : -1;   // >=0: tempo virtual (avança virtualTickStep ms a cada vGetTickCount)
+    public long virtualTickStep = System.getenv("VTICK")!=null ? Long.parseLong(System.getenv("VTICK").trim()) : 1;
     int nextHeap;
+    // Allocator com FREE LIST: reclama memoria liberada por vDisposePtr/vFreePtr. Sem isto (bump puro) o
+    // "livre" so caia -> jogos com detector de leak (Deep Abyss: aloca+libera temporarios e checa se vMemFree()
+    // voltou ao valor de antes) disparavam "MEMORYLEAK". liveBlocks: ptr->tamanho; freeList: blocos livres p/
+    // reuso; freeBytes: total livre reciclavel. vMemFree = (heapEnd-nextHeap)+freeBytes.
+    int taskStackSize = 16384;      // pilha padrao das tarefas (vSetStackSize muda)
+    final java.util.HashMap<Integer,Integer> liveBlocks = new java.util.HashMap<>();
+    final java.util.ArrayList<int[]> freeList = new java.util.ArrayList<>();   // [ptr, size]
+    int freeBytes = 0;
+    int prlog=0;
     int foreColor=0xff, backColor=0, transferMode=1;   // default = TransferMode.Transparent (nofun)
     // fonte bitmap definida pelo jogo (VMGPFONT, usada por vPrint). ptr=0 => usa a fonte do sistema.
     int aFontPtr=0, aFontData=0, aFontChartbl=0, aFontBpp=0, aFontW=0, aFontH=0, aFontPal=0;
@@ -24,13 +44,67 @@ public final class Sdk {
     public int deviceVendor = 3;           // SonyEricsson
     // formato grafico reportado no VideoCaps (vmgpvfmt.h): 7 = RGB332 (256 cores diretas), que e o
     // framebuffer real deste emulador em TODOS os perfis de aparelho. "256 colors" nos jogos = formato>=6.
-    public int videoFormat = 7;            // VCAPS_RGB332
+    // VCAPS_RGB332=7 (8bpp, 256 cores) por padrao. VIDFMT=8 reporta VCAPS_16BPP (RGB565): jogos que
+    // consultam vGetCaps(Video) passam a renderizar em 16 bits em vez de ditherizar p/ 256 cores.
+    // Nosso framebuffer interno JA e ARGB, entao 16bpp nao custa nada aqui.
+    public int videoFormat = System.getenv("VIDFMT")!=null ? Integer.parseInt(System.getenv("VIDFMT").trim()) : 7;
     public int apiMinor = 50;              // vGetVMGPInfo = (2<<16)|apiMinor
 
     // sprites
     int spriteCount=0; int[] slotSprite; short[] slotX, slotY;
+    // true enquanto vUpdateSprite/vUpdateSpriteMap estao percorrendo os SLOTS. O vmgp.h documenta o
+    // transfer mode APENAS no vDrawObject ("using the current transfer mode"); o motor de slots nao o
+    // menciona -- ele desenha objetos de jogo sobre um fundo, logo a cor 0 e sempre a cor-chave.
+    boolean spriteSlotDraw=false;
     // mapa atual
     int mapHeaderPtr=0; int mapX=0, mapY=0;
+    // CÓPIA do MAP_HEADER. O vmgp.h descreve vMapInit/vMapHeaderUpdate como quem "aloca" os recursos
+    // do tilemap a partir da definicao (vMapDispose "releases all resources used by the current
+    // tilemap, as allocated by vMapInit() or vMapHeaderUpdate()"), entao o jogo pode reaproveitar o
+    // buffer da struct depois de chamar. O Shooting Star monta o header num buffer temporario e o
+    // zera em seguida: guardando so o PONTEIRO, drawMap lia 0x0 e nao pintava nada -> o fundo nunca
+    // era repintado e tudo que se movia deixava rastro. mapSync() atualiza a copia enquanto o header
+    // do jogo continuar valido (preserva jogos que editam a struct no lugar) e a congela quando morre.
+    int mhFlag, mhFmt, mhW, mhH, mhAnim, mhXPan, mhYPan, mhXPos, mhYPos, mhMapData, mhTileData;
+    boolean mhValid=false;
+    public long mapDraws=0, mapAborts=0, mapSalvos=0;   // MAPSTAT: chamadas, abortos e vezes que a COPIA salvou
+    /** ponteiro que pode conter dados de verdade: secao estatica, ou heap ja alocado. */
+    boolean plausiblePtr(int p){
+        if(p < vm.base || p >= vm.base+vm.mem.length) return false;
+        return p < vm.heapBase || p < nextHeap;
+    }
+    /**
+     * Le o MAP_HEADER do jogo para a copia interna. So faz isso quando o jogo MANDA (vMapInit /
+     * vMapHeaderUpdate, que zeram mhValid) -- nunca a cada desenho.
+     *
+     * Motivo (Crazy Bombs, achado por desmontagem em 0x101d0): a funcao que monta a fase poe o
+     * MAP_HEADER na PILHA (`ADDQ sp = sp+-28`, header em sp+4, `ADDQ p0 = sp+4` antes do vMapInit)
+     * e depois RETORNA. Dali em diante aquela memoria e reaproveitada por outras chamadas, entao
+     * reler o header vivo a cada drawMap trazia lixo de pilha -- largura/altura/ponteiros aleatorios
+     * -> o cenario virava faixas de fragmentos, e piorava quando o jogo alocava (o TIRO da nave).
+     * O exemplo oficial do SDK (tutorials/2DBackground) nao expoe isso porque a funcao dele nunca
+     * retorna (fica no while(1)); o runtime real obviamente tira um INSTANTANEO no vMapInit, senao
+     * o jogo quebraria no aparelho tambem. A doc confirma: vMapInit "initializes the map functions
+     * with the settings specified in map", e vMapHeaderUpdate existe justamente p/ o jogo avisar
+     * que mexeu no header. Os setters (vMapSetXY/vMapSetTile/vMapSetAttribute) atualizam a copia.
+     */
+    void mapSync(){
+        if(mhValid) return;                       // ja temos o instantaneo; nao rele a pilha
+        int hp=mapHeaderPtr; if(hp==0) return;
+        int w=vm.read8(hp+2)&0xff, h=vm.read8(hp+3)&0xff;
+        int md=vm.read32(hp+16), td=vm.read32(hp+20);
+        if(w==0||h==0||md==0||td==0){ if(mhValid) mapSalvos++; return; }   // header morto: usa a copia
+        // Ponteiro PLAUSIVEL = area estatica (code/data/bss/res) ou heap ABAIXO do topo alocado.
+        // O MAP_HEADER do Crazy Bombs vive na PILHA e e sobrescrito: passava a valer tileData=0x25000c,
+        // que nunca foi alocado (topo do heap ~0x22b88). "Diferente de zero" nao basta -- desenhavamos
+        // tiles lidos de memoria nunca escrita, e a fase virava faixas de fragmentos. O buffer real e
+        // vNewPtr(14976)=0x1eda8 (234 tiles x 64) com o mapa em vNewPtr(864)=0x22828 (16x54).
+        if(!plausiblePtr(md) || !plausiblePtr(td)){ if(mhValid) mapSalvos++; return; }
+        mhFlag=vm.read8(hp)&0xff; mhFmt=vm.read8(hp+1)&0xff; mhW=w; mhH=h; mhAnim=vm.read8(hp+4)&0xff;
+        mhXPan=(short)vm.read16(hp+8);  mhYPan=(short)vm.read16(hp+10);
+        mhXPos=vm.read16(hp+12)&0xffff; mhYPos=vm.read16(hp+14)&0xffff;   // MAP_HEADER.x/y sao uint16
+        mhMapData=md; mhTileData=td; mhValid=true;
+    }
     // streams (handle 1-based -> dados do recurso + posicao)
     final Map<Integer,byte[]> streamData = new HashMap<Integer,byte[]>();
     final Map<Integer,int[]>  streamPos  = new HashMap<Integer,int[]>();
@@ -50,12 +124,41 @@ public final class Sdk {
     // No SDK <1.50 o vFillRect IGNORA a janela de recorte (Graphics.cs) — essencial p/ o fundo
     // das corridas pseudo-3D (XxX/V-Rally clipam a tela ao topo e ainda assim preenchem o chao).
     public boolean version150 = false;
+    public final boolean fmt7Transp;   // HC2: fmt7 idx0 = transparente mesmo com tm=0 (ver detectaFmt7Transp)
     public Sdk(Pip2 vm, Screen scr){
         this.vm=vm; this.scr=scr; this.nextHeap=vm.heapBase; this.vsound=new VSound(vm); this.r3d=new Renderer3D(vm,scr);
         this.version150 = vm.exe.importsSymbol("vInit3D");
+        this.fmt7Transp = detectaFmt7Transp(vm.exe);
+    }
+    // ---- fmt7 (RGB332) com indice 0 = chave de transparencia, POR JOGO ----
+    // Regra geral (ver comentario do topo): a transparencia 2D vem do TRANSFER MODE. O Honey Cave 2 e
+    // a excecao medida: TODOS os seus vDrawObject saem com fmt=7 e tm=0 (MODE_BLOCK) -- inclusive a lua
+    // do ceu (drawObject @(41,20) fmt=7 21x19 tm=0) e os sprites do HUD -- e mesmo assim no aparelho
+    // real eles aparecem recortados. Respeitar o tm da um retangulo preto em volta de cada sprite.
+    // Ligar isso GLOBALMENTE regride os fundos DITHERED do Joe's Treasure Quest (preto e uma das 2
+    // cores do dither -> buracos + smearing), por isso o escopo e so o HC2.
+    // Identificacao pelo CONTEUDO do container (nao pelo nome do arquivo, que o usuario pode renomear):
+    // as strings "Level1.mec".."Level4.mec" existem em 1 dos 246 jogos testados -- o HC2. O HC1 nao as tem.
+    // Escape manual: FMT7TRANSP=1 liga em qualquer jogo, FMT7TRANSP=0 desliga.
+    static boolean detectaFmt7Transp(Vmgp exe){
+        String env=System.getenv("FMT7TRANSP");
+        if(env!=null) return !env.trim().equals("0");
+        return contem(exe.all,"Level1.mec") && contem(exe.all,"Level4.mec");
+    }
+    private static boolean contem(byte[] d, String s){
+        byte[] n; try { n=s.getBytes("ISO-8859-1"); } catch(Exception e){ return false; }
+        outer: for(int i=0;i+n.length<=d.length;i++){
+            for(int j=0;j<n.length;j++) if(d[i+j]!=n[j]) continue outer;
+            return true;
+        }
+        return false;
     }
 
+    // SDKCOUNT=1: conta as chamadas do SDK por nome (diagnostico de "quem desenha o que").
+    static final boolean SDKCOUNT = System.getenv("SDKCOUNT")!=null;
+    public final java.util.TreeMap<String,Long> sdkCalls = new java.util.TreeMap<String,Long>();
     public void invoke(String name){
+        if(SDKCOUNT){ Long c=sdkCalls.get(name); sdkCalls.put(name, c==null?1L:c+1L); }
         if(trace){
             String extra="";
             if(name.equals("vTextOut")||name.equals("vTextOutU")) extra=" str=\""+readStr(vm.arg(2),name.endsWith("U"))+"\"";
@@ -66,11 +169,12 @@ public final class Sdk {
             // ---------- memoria ----------
             case "vNewPtr": case "vMalloc": case "vNewPtrDbg": vm.ret(alloc(vm.arg(0), false)); break;
             case "vNewPtrClear": case "vAllocClear": case "vCallocPtr": vm.ret(alloc(vm.arg(0), true)); break;
-            case "vDisposePtr": case "vFreePtr": vm.ret(0); break;   // bump allocator: no-op
-            // vMemFree()/vMaxFreeBlock(): CONSULTAS (nao liberam!) — retornam bytes livres no heap. O Da Vinci
-            // Code chama vMemFree() antes de carregar o nivel 3D; retornar 0 (nao-implementado) fazia ele achar
-            // que nao ha memoria -> nao carrega -> tela preta no New Game. Bump allocator: livre = heapEnd-nextHeap.
-            case "vMemFree": case "vMaxFreeBlock": case "vMemAvail": vm.ret(vm.heapEnd - nextHeap); break;
+            case "vDisposePtr": case "vFreePtr": freePtr(vm.arg(0)); vm.ret(0); break;   // reclama (free list)
+            // vMemFree()/vMaxFreeBlock()/vMemAvail(): CONSULTAS — bytes livres = bump restante + free list. O Da
+            // Vinci Code chama vMemFree() antes de carregar o nivel 3D; retornar 0 fazia ele achar que nao ha
+            // memoria -> tela preta no New Game. E o Deep Abyss compara vMemFree() antes/depois de alocar+liberar
+            // temporarios: sem reclamar, o valor caia -> "MEMORYLEAK".
+            case "vMemFree": case "vMaxFreeBlock": case "vMemAvail": vm.ret((vm.heapEnd - nextHeap) + freeBytes); break;
             // ---------- sistema ----------
             case "vGetTickCount": if(virtualTick>=0){ virtualTick+=virtualTickStep; vm.ret((int)virtualTick); } else vm.ret((int)(System.currentTimeMillis()-tick0)); break;
             case "vGetTime": vm.ret((int)(System.currentTimeMillis()/1000L)); break;   // segundos desde 1970 (epoch UTC). Football Pro usa p/ seed/relogio; antes caia no default=0 -> logica de tempo quebrava
@@ -84,8 +188,65 @@ public final class Sdk {
             case "vGetRandom": { rngState=rngState*6364136223846793005L+1442695040888963407L; vm.ret((short)(rngState>>>33)); break; }
             case "vSetRandom": rngState = (vm.arg(0)&0xffffffffL); break;
             case "vGetCaps": vm.ret(getCaps(vm.arg(0), vm.arg(1))); break;
-            case "vSysCtl": vm.ret(0); break;
+            // vSysCtl(cmd, arg). SYSCTL_SETVIBRATE(1): bit0 = liga/desliga, bits 16-31 = duracao em ms
+            // (o macro vSetVibrate(on,time) do vmgp.h monta vSysCtl(1, on | (time<<16))). O Honey Cave 2
+            // usa isso ao tomar dano -- medido: cmd=1 arg=0x012C0001 = ligar por 300 ms.
+            // NO DESKTOP nao ha o que vibrar: fica no-op de proposito, so com log opcional (SYSCTLLOG=1).
+            // Implementado de verdade no Android (Sdk.Vibrador -> Vibra.java).
+            case "vSysCtl":
+                if(System.getenv("SYSCTLLOG")!=null)
+                    System.out.println("[SYSCTL] cmd="+vm.arg(0)+" arg=0x"+Integer.toHexString(vm.arg(1))
+                        +" on="+(vm.arg(1)&1)+" ms="+((vm.arg(1)>>>16)&0xffff));
+                vm.ret(0); break;
             case "vTerminateVMGP": vm.stopped=true; break;
+
+            // ---- Tarefas (multitarefa cooperativa; semantica = nofun) ----
+            // vSetStackSize define o tamanho da pilha das PROXIMAS tarefas; vCreateTask aloca essa
+            // pilha no heap e enfileira a tarefa. O jogo tipicamente cria uma tarefa de trabalho e
+            // espera nela com vTaskAlive.
+            case "vSetStackSize": { taskStackSize = Math.max(4096, (vm.arg(0)+3)&~3); vm.ret(taskStackSize); break; }
+            case "vCreateTask": {
+                int entry=vm.arg(0), p0=vm.arg(1), p1=vm.arg(2), p2=vm.arg(3);
+                int blk = alloc(taskStackSize, false);
+                if(System.getenv("TASKLOG")!=null) System.out.println("[TAREFAS] vCreateTask entry=0x"+Integer.toHexString(entry)+" pilha="+taskStackSize+" blk="+blk+" nextHeap="+nextHeap+" heapEnd="+vm.heapEnd);
+                if(blk==0){ vm.ret(-1); break; }
+                int spTop = blk + taskStackSize;                 // pilha cresce p/ baixo
+                vm.ret(vm.createTask(entry, p0, p1, p2, spTop, blk));
+                break;
+            }
+            case "vDisposeTask": vm.disposeTask(vm.arg(0)); vm.ret(0); break;
+            case "vTaskAlive": vm.ret(vm.taskAlive(vm.arg(0))?1:0); break;
+            case "vThisTask": vm.ret(vm.thisTaskId()); break;
+            case "vSend": { Pip2.Task t=vm.tasks.get(vm.arg(0)); if(t!=null) t.recv=vm.arg(1); vm.ret(0); break; }
+            case "vReceiveAny": { Pip2.Task t=vm.tasks.get(vm.arg(0)); vm.ret(t!=null? t.recv : 0); break; }
+            case "vReceive": { Pip2.Task t=vm.currentTask; vm.ret(t!=null? t.recv : 0); break; }
+
+            // ---- utilitarios que faltavam ----
+            case "vAbs": vm.ret(Math.abs(vm.arg(0))); break;
+
+            // ---- ordem de bytes de rede (usadas na init de comunicacao; Martial Arts 3D) ----
+            case "htons": { int v=vm.arg(0)&0xffff; vm.ret(((v&0xff)<<8)|((v>>8)&0xff)); break; }
+            case "htonl": { int v=vm.arg(0);
+                vm.ret(((v&0xff)<<24)|(((v>>8)&0xff)<<16)|(((v>>16)&0xff)<<8)|((v>>>24)&0xff)); break; }
+
+            // ---- strings UNICODE (pip_wchar_t = 16 bits) ----
+            // O SDK documenta explicitamente "Return: Pointer to the terminating null-character",
+            // confirmando a convencao ponteiro-FIM de toda a familia de strings do mophun.
+            case "vStrLenU": { int p=vm.arg(0), n=0; while(vm.read16(p+n*2)!=0) n++; vm.ret(n); break; }
+            case "vStrCpyU": { int dst=vm.arg(0), src=vm.arg(1), i=0; int w;
+                while(true){ w=vm.read16(src+i*2); vm.write16(dst+i*2, w); if(w==0) break; i++; }
+                vm.ret(dst+i*2); break; }
+            case "vStrToU": { int dst=vm.arg(0), src=vm.arg(1), i=0; int b;
+                while(true){ b=vm.read8(src+i); vm.write16(dst+i*2, b); if(b==0) break; i++; }
+                vm.ret(dst+i*2); break; }
+
+            // vStreamReady(handle, mode): bitmask do estado. Streams locais estao sempre prontos.
+            case "vStreamReady": vm.ret(streamData.containsKey(vm.arg(0)) ? vm.arg(1) : 0); break;
+            case "vStrCmp": {
+                int a=vm.arg(0), b=vm.arg(1), i=0, r=0;
+                while(true){ int ca=vm.read8(a+i), cb=vm.read8(b+i); if(ca!=cb){ r=ca-cb; break; } if(ca==0) break; i++; }
+                vm.ret(r); break;
+            }
             // ---------- identidade/DRM/versao (valores do nofun) ----------
             case "vCheckDataCert": case "vCheckDataCertFile": vm.ret(1); break;   // stub de sucesso (nofun)
             case "vCheckIMEI": vm.ret(1); break;
@@ -97,22 +258,33 @@ public final class Sdk {
             case "vWaitVBL": vm.ret(0); break;                                    // no-op (pacing esta no vFlipScreen)
             case "vTestKey":  vm.ret(testKey(vm.arg(0))); break;   // 1 se a tecla ASCII do keypad esta pressionada
             case "vScanKeys": vm.ret(scanKeys()); break;           // ASCII da tecla atualmente pressionada
-            case "vBeep": break;
+            case "vBeep": if(soundEnabled) vsound.beep(vm.arg(0), vm.arg(1)); break;   // tom simples (Mooktown Tennis, Alpine Ski)
             // ---------- graficos ----------
             case "vClearScreen": dlog("clearScreen fore="+colStr(vm.arg(0))); Arrays.fill(scr.fb, getColor(vm.arg(0))); vm.ret(0); break;
-            case "vFlipScreen": if(DRAWLOG) dlog("--- FLIP (frame "+drawLogFrame+") ---"); scr.present(); r3d.clearDepthPerFrame(); vm.ret(0); break;
+            case "vFlipScreen": if(DRAWLOG) dlog("--- FLIP (frame "+drawLogFrame+") ---"); scr.present(); r3d.clearDepthPerFrame();
+                // FRAMEMARK=1: pinta o buffer de magenta DEPOIS do flip. O que sobrar magenta no proximo
+                // snapshot sao pixels que o jogo NAO escreveu naquele frame (fonte de smearing).
+                if(System.getenv("FRAMEMARK")!=null) java.util.Arrays.fill(scr.fb, 0xffff00ff);
+                vm.ret(0); break;
             case "vSetForeColor": foreColor=vm.arg(0); break;   // cor crua (indice ou RGB555 se bit31)
             case "vSetBackColor": backColor=vm.arg(0); break;
             case "vSetPaletteEntry": scr.setPaletteRgb555(vm.arg(0), vm.arg(1)); break;
             case "vGetPaletteEntry": vm.ret(Screen.argbToRgb555(scr.palette[vm.arg(0)&0xff])); break;
             case "vSetPalette": setPalette(vm.arg(0), vm.arg(1), vm.arg(2)); break;
-            case "vSetTransferMode": transferMode=vm.arg(0); break;
+            // vSetTransferMode DEVOLVE o modo ANTERIOR (vmgp.h). Nao devolver nada deixava o padrao
+            // "old=vSetTransferMode(X); ...; vSetTransferMode(old);" restaurar lixo -- na pratica 0 --
+            // e o modo ficava preso em MODE_BLOCK (HoneyCave 2: o aro branco do icone de mel ganhava
+            // mordidas pretas porque os cantos do sprite deixavam de ser chave).
+            case "vSetTransferMode": { int prevTm=transferMode; transferMode=vm.arg(0); vm.ret(prevTm); break; }
             case "vSetClipWindow": dlog("setClipWindow ("+(short)vm.arg(0)+","+(short)vm.arg(1)+")-("+(short)vm.arg(2)+","+(short)vm.arg(3)+")"); scr.setClip((short)vm.arg(0),(short)vm.arg(1),(short)vm.arg(2),(short)vm.arg(3)); break;
             case "vFillRect": fillRect((short)vm.arg(0),(short)vm.arg(1),(short)vm.arg(2),(short)vm.arg(3)); break;
             case "vDrawLine": drawLine((short)vm.arg(0),(short)vm.arg(1),(short)vm.arg(2),(short)vm.arg(3)); break;
-            case "vPlot": break;                               // no-op (fiel ao nofun)
+            // vPlot(int16 x, int16 y): UM pixel na foreColor, "The operation is clipped" (vmgp.h).
+            // Era no-op: o Hyper Apocalypse desenha TODO o campo de estrelas/particulas ponto a ponto
+            // (144.480 vPlot + 173.351 vSetForeColor numa partida) -> fundo do espaco 100% preto.
+            case "vPlot": px((short)vm.arg(0), (short)vm.arg(1), getColor(foreColor)); break;
             case "vGetPixel": vm.ret(0); break;
-            case "vUpdateSpriteMap": drawMap(); if(slotSprite!=null) for(int i=0;i<spriteCount;i++) if(slotSprite[i]!=0) drawObject(slotX[i],slotY[i],slotSprite[i]); break;
+            case "vUpdateSpriteMap": drawMap(); drawSpriteSlots(); break;
             // ---------- input ----------
             case "vGetButtonData": vm.ret(scr.getButtons()); break;
             // ---------- sprites ----------
@@ -121,38 +293,76 @@ public final class Sdk {
             case "vSpriteSet": { int s=vm.arg(0)&0xff;
                 if(System.getenv("SSLOG")!=null) System.out.println("[vSpriteSet] arg0=0x"+Integer.toHexString(vm.arg(0))+" -> slot="+s+" sprite=0x"+Integer.toHexString(vm.arg(1))+" @("+(short)vm.arg(2)+","+(short)vm.arg(3)+") fp=0x"+Integer.toHexString(vm.getReg(12))+" stored="+(slotSprite!=null&&s<spriteCount));
                 if(slotSprite!=null&&s<spriteCount){ slotSprite[s]=vm.arg(1); slotX[s]=(short)vm.arg(2); slotY[s]=(short)vm.arg(3);} break; }
-            case "vUpdateSprite": if(slotSprite!=null) for(int i=0;i<spriteCount;i++) if(slotSprite[i]!=0) drawObject(slotX[i],slotY[i],slotSprite[i]); break;
-            case "vDrawObject": drawObject((short)vm.arg(0),(short)vm.arg(1),vm.arg(2)); break;
+            case "vUpdateSprite": drawSpriteSlots(); break;
+            case "vDrawObject": if(System.getenv("SPRDBG")!=null){ int sp=vm.arg(2);
+                System.out.println("[SPR] x="+vm.arg(0)+" y="+vm.arg(1)+" ptr="+sp+" pal="+vm.read8(sp)+" fmt="+vm.read8(sp+1)
+                    +" cx="+(short)vm.read16(sp+2)+" cy="+(short)vm.read16(sp+4)+" w="+vm.read16(sp+6)+" h="+vm.read16(sp+8)); }
+
+                 drawObject((short)vm.arg(0),(short)vm.arg(1),vm.arg(2)); break;
             case "vDrawTile":   drawTile(vm.arg(0),vm.arg(1),(short)vm.arg(2),(short)vm.arg(3)); break;   // tile 8x8 (chao/pista 3D do Rally)
             case "vUpdateSpriteRotate": break;
             case "vSpriteBoxCollision": vm.ret(spriteBoxCollision(vm.arg(0), vm.arg(1)&0xff, vm.arg(2)&0xff)); break;
             case "vSpriteCollision": vm.ret(spriteCollision(vm.arg(0)&0xff, vm.arg(1)&0xff, vm.arg(2)&0xff)); break;
             // ---------- tilemap ----------
-            case "vMapInit": mapHeaderPtr=vm.arg(0); vm.ret(1); break;
-            case "vMapDispose": mapHeaderPtr=0; break;
+            case "vMapInit": mapHeaderPtr=vm.arg(0); mhValid=false; mapSync(); vm.ret(1); break;
+            // vMapHeaderUpdate(MAP_HEADER*): "Update tilemap definition" (vmgp.h) -- re-aponta o motor
+            // de tiles p/ outro header, igual ao vMapInit. Sem isto o Shooting Star trocava de mapa e
+            // continuavamos lendo o header ANTIGO (ja liberado, mapData=0) -> drawMap abortava, o fundo
+            // nunca era repintado e o frame anterior ficava na tela (smearing em tiles e sprites).
+            case "vMapHeaderUpdate": mapHeaderPtr=vm.arg(0); mhValid=false; mapSync();
+                if(System.getenv("MAPLOG")!=null) System.out.println("[MAPA] vMapHeaderUpdate hdr=0x"+Integer.toHexString(mapHeaderPtr)
+                    +" flag=0x"+Integer.toHexString(vm.read8(mapHeaderPtr)&0xff)+" fmt="+(vm.read8(mapHeaderPtr+1)&0xff)
+                    +" "+(vm.read8(mapHeaderPtr+2)&0xff)+"x"+(vm.read8(mapHeaderPtr+3)&0xff)
+                    +" mapData=0x"+Integer.toHexString(vm.read32(mapHeaderPtr+16))+" tileData=0x"+Integer.toHexString(vm.read32(mapHeaderPtr+20)));
+                vm.ret(1); break;
+            case "vMapDispose": mapHeaderPtr=0; mhValid=false; break;
             case "vUpdateMap": drawMap(); break;
-            case "vMapSetXY": if(mapHeaderPtr!=0){ vm.write16(mapHeaderPtr+12, vm.arg(0)); vm.write16(mapHeaderPtr+14, vm.arg(1)); } break;
+            // escreve na struct do jogo (se ainda viva) E na copia -- e a copia que o drawMap usa
+            case "vMapSetXY": if(mapHeaderPtr!=0){ vm.write16(mapHeaderPtr+12, vm.arg(0)); vm.write16(mapHeaderPtr+14, vm.arg(1)); }
+                mhXPos=vm.arg(0)&0xffff; mhYPos=vm.arg(1)&0xffff; break;   // vMapSetXY(uint16,uint16)
             // vMapGetAttribute/Tile(byte x, byte y): args sao BYTES no nofun -> mascarar &0xFF (corrige x "negativo" ao virar esquerda)
             case "vMapGetAttribute": vm.ret(mapAttr(vm.arg(0)&0xff, vm.arg(1)&0xff)); break;
             case "vMapGetTile": vm.ret(mapTile(vm.arg(0)&0xff, vm.arg(1)&0xff)); break;
+            // vMapSetTile/vMapSetAttribute(byte x, byte y, byte v): ESCREVEM no mapData da VM (base-1; drawMap
+            // le de volta). Sem isto eram no-op -> o mapa ficava VAZIO -> jogos de tilemap (ex.: 1849 Gold Rush)
+            // ficavam SEM CHAO e com "smearing": vUpdateMap nao desenhava nada, logo o fundo nunca cobria a tela
+            // e o frame anterior persistia. ABI: a maioria passa (x,y,v) em arg0..2, mas alguns deixam um ponteiro
+            // em P0 e passam em arg1..3. Coord e uint8 (0..255): se arg0 tem bits acima do byte baixo e um
+            // ponteiro stale -> le deslocado (arg1..3); senao canonico (arg0..2).
+            // vMapSetTile/vMapSetAttribute(u8 x, u8 y, u8 v): ABI canonica x=P0,y=P1,v=P2 (confirmado por
+            // disassembly: MOVB a0=x; MOVB a1=y; LDQ a2=v; calll). Mascarar &0xFF pois o jogo carrega x/y
+            // com MOVB (so o byte baixo; os bits altos sao lixo do valor anterior do registrador). Sem estes
+            // setters, tilemaps ficavam VAZIOS -> jogos SEM CHAO e com "smearing" (o mapa nao cobria a tela).
+            case "vMapSetTile": mapSetTile(vm.arg(0)&0xff, vm.arg(1)&0xff, vm.arg(2)&0xff); break;
+            case "vMapSetAttribute": mapSetAttr(vm.arg(0)&0xff, vm.arg(1)&0xff, vm.arg(2)&0xff); break;
             // ---------- texto (fonte do sistema via Java) ----------
             case "vSelectFont": scr.selectFont(vm.arg(0), vm.arg(1)); vm.ret(vm.arg(1)); break;   // size + flags (SDK)
             case "vSetActiveFont": vm.ret(setActiveFont(vm.arg(0))); break;   // fonte bitmap do jogo (VMGPFONT)
             case "vTextOut":  scr.drawText((short)vm.arg(0), (short)vm.arg(1), readStr(vm.arg(2), false), getColor(foreColor)); vm.ret(0); break;
             case "vTextOutU": scr.drawText((short)vm.arg(0), (short)vm.arg(1), readStr(vm.arg(2), true),  getColor(foreColor)); vm.ret(0); break;
-            case "vPrint":    vPrint(vm.arg(0), (short)vm.arg(1), (short)vm.arg(2), readStr(vm.arg(3), false)); vm.ret(0); break;
+            case "vPrint":    if(System.getenv("PRINTLOG")!=null && prlog++<12) System.out.println("[PRINT] mode="+vm.arg(0)+" ("+((short)vm.arg(1))+","+((short)vm.arg(2))+") back="+backColor+" fore="+foreColor+" \""+readStr(vm.arg(3),false)+"\"");
+                              vPrint(vm.arg(0), (short)vm.arg(1), (short)vm.arg(2), readStr(vm.arg(3), false)); vm.ret(0); break;
             // extent = (altura << 16) | largura (o jogo le srli #16 p/ altura, &0xFFFF p/ largura)
             case "vTextExtent":  vm.ret(textExtent(readStr(vm.arg(0), false))); break;
             case "vTextExtentU": vm.ret(textExtent(readStr(vm.arg(0), true))); break;
             case "vCharExtent":  vm.ret(textExtent(new String(Character.toChars(vm.arg(0)&0xffff)))); break;
             // vMsgBox(flags, mensagem, titulo): flags&0x80=tem titulo. Modal, retorna botao (1=OK).
-            case "vMsgBoxU": vm.ret(scr.showMessageBox((vm.arg(0)&0x80)!=0?readStr(vm.arg(2),true):null, readStr(vm.arg(1),true))); break;
-            case "vMsgBox":  vm.ret(scr.showMessageBox((vm.arg(0)&0x80)!=0?readStr(vm.arg(2),false):null, readStr(vm.arg(1),false))); break;
+            case "vMsgBoxU": vm.ret(scr.showMessageBox((vm.arg(0)&0x80)!=0?readStr(vm.read32(vm.getReg(Pip2.SP)),true):null, readStr(vm.arg(1),true))); break;
+            // vMsgBox(flags, msg, ...): o ... e o TITULO (VMB_TITLE). Sendo ellipsis, vem na PILHA
+            // (MophunAsmRef 1.3.1), nao em $p2 -- antes liamos um ponteiro errado como titulo.
+            case "vMsgBox":  vm.ret(scr.showMessageBox((vm.arg(0)&0x80)!=0?readStr(vm.read32(vm.getReg(Pip2.SP)),false):null, readStr(vm.arg(1),false))); break;
             // ---------- string ----------
             case "vStrLen": { int p=vm.arg(0),n=0; while(vm.read8(p+n)!=0)n++; vm.ret(n); break; }
-            case "vStrCpy": { int dst=vm.arg(0),src=vm.arg(1),i=0; int b; do{ b=vm.read8(src+i); vm.write8(dst+i,b); i++; }while(b!=0); vm.ret(dst); break; }
-            case "vitoa": vm.ret(itoa(vm.arg(0),vm.arg(1),true)); break;
-            case "vutoa": vm.ret(itoa(vm.arg(0),vm.arg(1),false)); break;
+            // vStrCpy devolve o PONTEIRO PARA O FIM (o ' ' escrito), NAO o inicio como o strcpy do C.
+            // Os jogos encadeiam isso p/ montar strings: o printf interno do Da Vinci Code faz
+            //   out = vStrCpy(out, arg)   e continua escrevendo a partir do retorno.
+            // Devolvendo o inicio, o texto seguinte SOBRESCREVIA o que acabou de ser copiado
+            // ("levels/%s.clevel" + "0_TheHotel" saia como "levels/.clevel"). Semantica = nofun.
+            case "vStrCpy": { int dst=vm.arg(0),src=vm.arg(1),i=0; int b;
+                while(true){ b=vm.read8(src+i); vm.write8(dst+i,b); if(b==0) break; i++; }
+                vm.ret(dst+i); break; }
+            case "vitoa": vm.ret(itoa(vm.arg(0),vm.arg(1),true, vm.arg(2)&0xff, vm.arg(3)&0xff)); break;
+            case "vutoa": vm.ret(itoa(vm.arg(0),vm.arg(1),false, vm.arg(2)&0xff, vm.arg(3)&0xff)); break;
             // ---------- descompressao ----------
             // vDecompress(source, dest, streamHandle, readBufSize): source==0 => descomprime do stream
             case "vDecompress": vm.ret(vm.arg(0)==0 ? decompressStream(vm.arg(2), vm.arg(1)) : decompress(vm.arg(0), vm.arg(1))); break;
@@ -257,6 +467,24 @@ public final class Sdk {
             case "vMul": vm.ret(r3d.vMul(vm.arg(0),vm.arg(1))); break;
             case "vDiv": vm.ret(r3d.vDiv(vm.arg(0),vm.arg(1))); break;
             case "vSqrt": vm.ret(r3d.vSqrt(vm.arg(0))); break;
+
+            // ---- ponto fixo 16.16 (familia "16"/"F16"; o SDK 2.5 nao documenta, veio depois) ----
+            // O resto do SDK usa base 2^14; estas usam 2^16. Sem elas caiam no default (=0) e TODA a
+            // matematica de posicao do jogo virava zero (Worms World Party chama vMul16 ~9 mil vezes).
+            case "vMul16": vm.ret((int)(((long)vm.arg(0)*vm.arg(1)) >> 16)); break;
+            case "vDiv16": { int b=vm.arg(1); vm.ret(b==0?0:(int)(((long)vm.arg(0)<<16)/b)); break; }
+            case "vSinF16": vm.ret((int)Math.round(Math.sin(Renderer3D.ang2rad(vm.arg(0))) * 65536.0)); break;
+            case "vCosF16": vm.ret((int)Math.round(Math.cos(Renderer3D.ang2rad(vm.arg(0))) * 65536.0)); break;
+            // vLimit(valor, min, max): satura no intervalo
+            case "vLimit": { int v=vm.arg(0), lo=vm.arg(1), hi=vm.arg(2);
+                vm.ret(v<lo?lo:(v>hi?hi:v)); break; }
+            // vStrCat(s1,s2): concatena. Devolve o ponteiro para o ' ' final (FIM), como o vStrCpy
+            // do mophun -- verificado por ASM que o Worms nao usa o retorno, entao seguimos a familia.
+            case "vStrCat": { int d1=vm.arg(0), s2=vm.arg(1), e=0;
+                while(vm.read8(d1+e)!=0) e++;                 // vai ate o fim de s1
+                int i=0; int b2;
+                while(true){ b2=vm.read8(s2+i); vm.write8(d1+e+i,b2); if(b2==0) break; i++; }
+                vm.ret(d1+e+i); break; }
             case "vSin": vm.ret(r3d.vSin(vm.arg(0))); break;
             case "vCos": vm.ret(r3d.vCos(vm.arg(0))); break;
             case "vTan": vm.ret(r3d.vTan(vm.arg(0))); break;
@@ -268,11 +496,49 @@ public final class Sdk {
 
     // ---------------- implementacoes ----------------
     int alloc(int size, boolean clear){
-        int sz=(size+7)&~7; int p=nextHeap;
+        if(size<0) return 0;
+        int sz=(size+7)&~7; if(sz==0) sz=8;
+        // 1) reusa um bloco livre (first-fit); divide se sobrar
+        for(int i=0;i<freeList.size();i++){
+            int[] b=freeList.get(i);
+            if(b[1]>=sz){
+                int p=b[0];
+                if(b[1]==sz) freeList.remove(i);
+                else { b[0]+=sz; b[1]-=sz; }        // resto continua livre
+                freeBytes-=sz; liveBlocks.put(p, sz);
+                // SEMPRE zera bloco REUSADO (mesmo com clear=false): antes da free list todo vNewPtr vinha
+                // do bump sobre memoria virgem (=zeros), e os jogos contam com isso — campos que eles nao
+                // inicializam ficavam 0. Reusar um bloco sujo entregava LIXO nesses campos (ex.: o sprite da
+                // faixa de ceu da fase 2 do Joe's Treasure Quest vinha com centerx/centery aleatorios ->
+                // desenho fora da tela -> ceu sumia). Zerar mantem o comportamento historico + o fix de leak.
+                for(int j=0;j<sz;j++) vm.write8(p+j,0);
+                return p;
+            }
+        }
+        // 2) bump
+        int p=nextHeap;
         if(p+sz>vm.heapEnd) return 0;
-        nextHeap+=sz;
-        if(clear) for(int i=0;i<sz;i++) vm.write8(p+i,0);
+        nextHeap+=sz; liveBlocks.put(p, sz);
+        for(int i=0;i<sz;i++) vm.write8(p+i,0);   // sempre zerado (os jogos contam com isso)
         return p;
+    }
+    // libera um bloco: se for o TOPO do heap recua nextHeap (e coalesce blocos livres adjacentes ao topo);
+    // senao entra na free list p/ reuso. Ponteiro desconhecido (ex.: alocado antes de um loadState) = ignora.
+    void freePtr(int ptr){
+        Integer szO = liveBlocks.remove(ptr);
+        if(szO==null) return;
+        int sz=szO;
+        if(ptr+sz==nextHeap){
+            nextHeap=ptr;                            // topo -> recua
+            boolean merged=true;
+            while(merged){                           // puxa de volta blocos livres que agora ficaram no topo
+                merged=false;
+                for(int i=0;i<freeList.size();i++){
+                    int[] b=freeList.get(i);
+                    if(b[0]+b[1]==nextHeap){ nextHeap=b[0]; freeBytes-=b[1]; freeList.remove(i); merged=true; break; }
+                }
+            }
+        } else { freeList.add(new int[]{ptr,sz}); freeBytes+=sz; }
     }
     void zero(int ptr,int n){ for(int i=0;i<n;i++) vm.write8(ptr+i,0); }
 
@@ -297,7 +563,19 @@ public final class Sdk {
     // ---- input por tecla ASCII (nofun InputDriver): o keypad do celular mapeia p/ os botoes logicos.
     // vTestKey(ascii): 2=Up 8=Down 4=Left 6=Right 5/*=Fire #=Fire2 0/217(SEOption)=Select;
     // diagonais 1=Up+Left 3=Up+Right 7=Down+Left 9=Down+Right. Retorna 1 se pressionado.
+    // CODIGOS DE TECLA DO APARELHO. O vmgp.h diz apenas que acima de 127 sao "implementation
+    // defined"; a tabela oficial esta em MophunSDK_2.5/pip/include/vmgpsonyericsson.h e e esta:
+    //   200 VOLUME_UP  201 VOLUME_DOWN  202 YES  203 NO  204 CLEAR  205 LEFT  206 RIGHT
+    //   207 FLIP_CLOSE 208 FLIP_OPEN    209 PHF  210 UP  211 DOWN   212 LEFT_UP 213 RIGHT_DOWN
+    //   214 NAV_SELECT 215 VOICENOTE    216 SELECT 217 OPTION
+    // 205/206/210/211 sao o JOYSTICK do aparelho, ou seja o proprio d-pad — derivamos dos bits.
+    // 203 (NO/vermelho) e 204 (CLEAR/tecla C) NAO tem bit equivalente: sao acoes proprias, mapeaveis
+    // no menu de controles (Config.ACTIONS), e chegam aqui pelo keypadPressed abaixo.
+    static final int SE_YES=202, SE_NO=203, SE_CLEAR=204, SE_LEFT=205, SE_RIGHT=206,
+                     SE_UP=210, SE_DOWN=211, SE_SELECT=216;
     static final int SEOPTION = 217;
+    static final int SEFT_SOFTKEY = 214;   // NAV_SELECT: apertar o joystick = confirmar
+    static final int ASCII_ESC = 27;       // alguns jogos (Brain Vita, Heli Attack 2) saem pelo ESC
     int testKey(int key){
         if(scr.keypadPressed(key)) return 1;              // tecla numerica literal pressionada (jogos tipo Bomb Jack)
         int b = scr.getButtons();
@@ -313,7 +591,23 @@ public final class Sdk {
             case '8': return (b&D)!=0?1:0;
             case '9': return ((b&(D|R))==(D|R))?1:0;
             case '0': case SEOPTION: return (b&S)!=0?1:0;
+            // 214 = SOFTKEY ESQUERDA do Sony Ericsson (a que o proprio jogo rotula "Select" no
+            // rodape). O vmgp.h diz que codigos >127 sao "implementation defined" e nem o nofun os
+            // mapeia; descoberto por experimento. Devolver sempre 0 travava quem confirma por ela:
+            // o Kely Slater (BUG-083) nunca saia do menu e o Something Fishy (BUG-116) nunca aceitava
+            // o OK. Vale como o botao de confirmar, igual ao FIRE.
+            case SEFT_SOFTKEY: return (b&F)!=0?1:0;
             case '#': return (b&F2)!=0?1:0;
+            // JOYSTICK do aparelho = d-pad. O SAAF (BUG-110) le a direcao SO por estes codigos, entao
+            // sem eles o jogo fica com controle morto; o Something Fishy le os dois caminhos.
+            case SE_LEFT:  return (b&L)!=0?1:0;
+            case SE_RIGHT: return (b&R)!=0?1:0;
+            case SE_UP:    return (b&U)!=0?1:0;
+            case SE_DOWN:  return (b&D)!=0?1:0;
+            // tecla verde (atender) e a de "select" dedicada valem como confirmar, igual ao NAV_SELECT
+            case SE_YES: case SE_SELECT: return (b&F)!=0?1:0;
+            // o ESC das versoes com teclado e a MESMA acao do 203 (voltar/sair) — mesmo botao
+            case ASCII_ESC: return scr.keypadPressed(SE_NO)?1:0;
             default: return 0;
         }
     }
@@ -323,6 +617,10 @@ public final class Sdk {
         for(int a='0'; a<='9'; a++) if(scr.keypadPressed(a)) return a;
         if(scr.keypadPressed('*')) return '*';
         if(scr.keypadPressed('#')) return '#';
+        // teclas de APARELHO antes do d-pad: quem espera "voltar" (Bomb Jack, Nostalgia Ball, SAAF) ou
+        // "apagar" (4-in-1, o pause do jogo Jake) le isso pelo vScanKeys, nao por bit de botao.
+        if(scr.keypadPressed(SE_NO))    return SE_NO;
+        if(scr.keypadPressed(SE_CLEAR)) return SE_CLEAR;
         int b = scr.getButtons();
         final int U=Screen.UP,D=Screen.DOWN,L=Screen.LEFT,R=Screen.RIGHT,F=Screen.FIRE,S=Screen.SELECT,F2=Screen.FIRE2;
         if((b&U)!=0){ if((b&L)!=0) return '1'; if((b&R)!=0) return '3'; return '2'; }
@@ -357,14 +655,15 @@ public final class Sdk {
         // -> a barra ficava VAZIA. Inclusivo tb corrige fills de tela que perdiam 1px na borda dir/inf.
         int c=getColor(foreColor);
         dlog("fillRect ("+x0+","+y0+")-("+x1+","+y1+") fore="+colStr(foreColor)+" clip=["+scr.clipX0+","+scr.clipY0+"-"+scr.clipX1+","+scr.clipY1+"] v150="+version150);
-        if(!version150){
-            // SDK <1.50 (nofun Graphics.cs): vFillRect IGNORA o clip -> so limita as bordas da TELA.
-            // Sem isto, XxX/V-Rally clipam ao topo (y<79) e o fillRect do chao (y>=100) some -> smearing.
-            int cx0=Math.max(0,x0), cy0=Math.max(0,y0), cx1=Math.min(scr.w-1,x1), cy1=Math.min(scr.h-1,y1);
-            for(int yy=cy0;yy<=cy1;yy++) for(int xx=cx0;xx<=cx1;xx++) scr.putNoClip(xx,yy,c);
-        } else {
-            for(int yy=y0;yy<=y1;yy++) for(int xx=x0;xx<=x1;xx++) px(xx,yy,c);   // SDK >=1.50: respeita o clip
-        }
+        // vFillRect RESPEITA o clip window, em qualquer versao de API. vmgp.h e explicito: na doc do
+        // vSetClipWindow, vFillRect esta na lista "functions affected by the clip window", e logo
+        // acima ela diz "Note that vClearScreen is not affected by the clip window" -- o contraste e
+        // proposital. Antes haviamos aberto uma excecao p/ API <1.50 (fill ignorava o clip), como
+        // paliativo p/ o chao do XxX/V-Rally. Isso APAGAVA o HUD do Graveyard Adventure: ele faz
+        // setClipWindow(0,0,127,95) e vFillRect(0,0,128,160) a cada frame contando com o clip p/
+        // limpar SO a area de jogo -- sem clip, o fill varria tambem o logo/caveira do HUD (pintados
+        // uma unica vez no inicio da fase), deixando a barra inferior preta.
+        for(int yy=y0;yy<=y1;yy++) for(int xx=x0;xx<=x1;xx++) px(xx,yy,c);
     }
     // vDrawLine(x0,y0,x1,y1) - Bresenham com foreColor (nofun implementa; era no-op aqui)
     void drawLine(int x0,int y0,int x1,int y1){
@@ -403,9 +702,20 @@ public final class Sdk {
     }
 
     // vSetPalette(colorsPtr, startIndex, count) - array de u16 RGB555
+    static final boolean PALLOG = System.getenv("PALLOG")!=null;
+    private final java.util.HashSet<String> palVistas = new java.util.HashSet<String>();
     void setPalette(int ptr,int start,int count){
         if(count>256) count=256;
         for(int i=0;i<count;i++) scr.setPaletteRgb555((start+i)&0xff, vm.read16(ptr+i*2));
+        if(PALLOG){
+            StringBuilder b = new StringBuilder();
+            for(int i=0;i<count && i<8;i++){
+                int raw = vm.read16(ptr+i*2) & 0xffff;
+                b.append(String.format(" [%d]=%04x->%06X", start+i, raw, scr.palette[(start+i)&0xff] & 0xffffff));
+            }
+            String linha = "[PAL] start="+start+" count="+count+b;
+            if(palVistas.add(linha)) System.out.println(linha);   // so combinacoes INEDITAS
+        }
     }
     // vatoi(strPtr, endPtr): ASCII -> int (pula espacos, sinal, digitos); endPtr(opcional) recebe o ptr apos o numero
     int vatoi(int strPtr,int endPtr){
@@ -442,10 +752,62 @@ public final class Sdk {
     // NativeSprite (10B): palOff,format,centerX(s16),centerY(s16),w(u16),h(u16); pixels @+10.
     // Formatos com <=8bpp de paleta/RGB332: pixel=indice -> paleta[indice+palOff]; indice 0 = transparente.
     int dobjBudget=0;
+    static final boolean SPRSTAT = System.getenv("SPRSTAT")!=null;
+    int sprN=0;
+    static final String SPRALL = System.getenv("SPRALL");
+    static final int SPRMAX = System.getenv("SPRMAX")!=null? Integer.parseInt(System.getenv("SPRMAX").trim()) : 80;
+    static final int SPRMIN = System.getenv("SPRMIN")!=null? Integer.parseInt(System.getenv("SPRMIN").trim()) : 300;
+    static final int SPRDUMP = System.getenv("SPRDUMP")!=null? (int)Long.decode(System.getenv("SPRDUMP").trim()).longValue() : 0;
+    final java.util.HashSet<Integer> sprDumpDone = new java.util.HashSet<Integer>();
+    int palLookupSdk(int i){ return (i>=0 && i<scr.palette.length)? scr.palette[i] : 0; }
     void drawObject(int x,int y,int sp){
+        if(SPRSTAT){
+            long p0=scr.pixels2d; int w0=vm.read16(sp+6), h0=vm.read16(sp+8), fmt0=vm.read16(sp+4);
+            drawObject0(x,y,sp);
+            long px=scr.pixels2d-p0;
+            if(px>SPRMIN && sprN++<SPRMAX) System.out.println("[SPR] sprite=0x"+Integer.toHexString(sp)+" pos("+x+","+y+") "+w0+"x"+h0+" fmt="+vm.read8(sp+1)+" centro("+(short)vm.read16(sp+2)+","+(short)vm.read16(sp+4)+") tm="+transferMode+" -> pixels="+px);
+            return;
+        }
+        drawObject0(x,y,sp);
+    }
+    void drawObject0(int x,int y,int sp){
+        if(SPRALL!=null && sp!=0 && sprDumpDone.add(sp ^ (vm.read16(sp+6)<<12) ^ (vm.read16(sp+8)<<20))){
+            // chave = ponteiro + w + h: jogos que REUSAM um buffer (Sweet Dreams: 0x1f478 serve de fundo
+            // 128x160 e de tabuleiro 98x76) so despejavam o primeiro uso.
+            int pf=vm.read8(sp+1)&0xff, pw=vm.read16(sp+6)&0xffff, ph=vm.read16(sp+8)&0xffff;
+            if(pw>0 && ph>0 && pw<=2048 && ph<=2048){
+              try { java.io.DataOutputStream w=new java.io.DataOutputStream(new java.io.BufferedOutputStream(
+                      new java.io.FileOutputStream(SPRALL+"/spr_"+Integer.toHexString(sp)+"_"+pw+"x"+ph+"_f"+pf+".bin")));
+                    w.writeInt(pw); w.writeInt(ph); w.writeInt(pf); w.writeInt(transferMode); w.writeInt(vm.read8(sp)&0xff);
+                    for(int i=0;i<256;i++) w.writeInt(scr.palette[i]);
+                    int bpp=bppOf(pf); int total=(pw*ph*bpp+7)/8;
+                    for(int k=0;k<total;k++) w.writeByte(vm.read8(sp+10+k)&0xff);
+                    w.close(); } catch(Exception e){}
+            }
+        }
+
+        if(SPRDUMP!=0 && sp==SPRDUMP && sprDumpDone.add(sp)){
+            int pf=vm.read8(sp+1), pw=vm.read16(sp+6), ph=vm.read16(sp+8), ppix=sp+10;
+            try { java.io.PrintWriter w=new java.io.PrintWriter(System.getenv("SPRDUMPFILE"));
+                  w.println(pw+" "+ph+" "+pf);
+                  for(int yy=0; yy<ph; yy++){ StringBuilder r=new StringBuilder();
+                      for(int xx=0; xx<pw; xx++){ int idx=vm.read8(ppix+yy*pw+xx)&0xff; int c=palLookupSdk(idx); r.append(c&0xffffff).append((char)32); }
+                      w.println(r); }
+                  w.close(); System.out.println("[SPRDUMP] ok "+pw+"x"+ph); } catch(Exception e){ System.out.println("[SPRDUMP] falhou "+e); }
+        }
+
         if(sp==0) return;
         int palOff=vm.read8(sp), format=vm.read8(sp+1);
         int cx=(short)vm.read16(sp+2), cy=(short)vm.read16(sp+4);
+        // SPRITE.centerx/centery (SDK: s16 @+2/@+4) sao o "ponto de ancoragem" do sprite — sempre da
+        // ordem do tamanho dele. Valores absurdos (|c| > 1024) nao existem em sprite legitimo e jogam o
+        // desenho inteiro p/ fora da tela. O fundo de ceu da FASE 2 do Joe's Treasure Quest e uma faixa
+        // 8x266 repetida 22x (x=0,8,...,168) cujo header vem com centery=-12416 -> as 22 chamadas
+        // desenhavam 0 pixels -> ceu sumia e o frame anterior vazava. Ignorar o centro absurdo restaura
+        // o ceu (cada faixa passa a desenhar 8x208=1664 px). NOTA: e uma PROTECAO — a causa de origem
+        // (quem grava -12416 no header durante o load da fase) continua em aberto.
+        if(cx>1024||cx<-1024) cx=0;
+        if(cy>1024||cy<-1024) cy=0;
         int w=vm.read16(sp+6), h=vm.read16(sp+8);
         if(w==0||h==0||w>2048||h>2048) return;
         if(DRAWLOG && dobjBudget<400){ dobjBudget++; dlog("drawObject @("+x+","+y+") fmt="+format+" "+w+"x"+h+" palOff="+palOff+" tm="+transferMode); }
@@ -453,7 +815,9 @@ public final class Sdk {
         int ox=x-cx, oy=y-cy;
         boolean flipX=(transferMode&2)!=0, flipY=(transferMode&4)!=0;   // TransferMode.FlipX=2/FlipY=4
         // transparencia (indice 0 = transparente) SO no modo Transparent (bit0); Block(0)=opaco -> fundos aparecem
-        boolean transp=(transferMode&1)!=0;
+        // fmt7Transp: so o Honey Cave 2 (ver detectaFmt7Transp) -- ele desenha tudo com tm=0 e espera
+        // recorte. Para os demais jogos a regra continua sendo o transfer mode.
+        boolean transp=(transferMode&1)!=0 || spriteSlotDraw || (fmt7Transp && format==7);
         for(int j=0;j<h;j++){
             int dy=oy+j; if(dy<scr.clipY0||dy>=scr.clipY1) continue;
             int sj = flipY ? (h-1-j) : j;
@@ -466,14 +830,13 @@ public final class Sdk {
                     // sub-byte (Palette2/4/16 = 1/2/4bpp) e LSB-first no mophun: 1o pixel no nibble/bit BAIXO
                     // (nofun DataConvertor.PaletteToARGB8888). MSB-first embaralhava texto/HUD de jogos 4bpp.
                     int idx=(vm.read8(byteIdx) >> (bitPos&7)) & mask;
-                    // idx0 = cor-chave TRANSPARENTE: no modo Transparent (tm&1) p/ QUALQUER formato, E
-                    // SEMPRE para fmt7 (RGB332). Motivo (pista do repo GitHub jamisson2006/wolphun): os
-                    // sprites do HC2 pos-transicao de fase ficam com transferMode=0 mas continuam
-                    // "PNG transparentes" no aparelho real -> depender de tm dava "quadrado preto" no ceu,
-                    // inclusive apos sair/re-entrar (resume) e em save states. Fmt7-sempre-transparente e
-                    // ROBUSTO (nao depende do estado da paleta). Testado: NAO regride o logo synergenix nem
-                    // o carro/pneu do menu do Rally (esses nao usam idx0 fmt7 sobre fundo claro).
-                    if((format==7 || transp) && idx==0) continue;
+                    // idx0 = cor-chave TRANSPARENTE: no modo Transparent (tm&1) p/ QUALQUER formato, e
+                    // para fmt7 (RGB332) nos jogos marcados por fmt7Transp (hoje: so o HC2). Os sprites do
+                    // HC2 ficam com transferMode=0 mas continuam "PNG transparentes" no aparelho real ->
+                    // depender de tm dava "quadrado preto" (a lua do ceu, o fundo do HUD), inclusive apos
+                    // sair/re-entrar (resume) e em save states. A marcacao e por conteudo do container, nao
+                    // pelo estado da paleta nem pelo nome do arquivo.
+                    if(transp && idx==0) continue;
                     if(format==1||format==2||format==0){                        // grayscale/mono
                         int g=Math.round(idx*255f/mask); argb=0xff000000|(g<<16)|(g<<8)|g;
                     } else if(format==7){
@@ -494,18 +857,24 @@ public final class Sdk {
             }
         }
     }
+    // Desenha os slots do motor de sprites. Marca spriteSlotDraw p/ o drawObject0 usar a cor 0 como
+    // chave mesmo com transferMode=MODE_BLOCK (o HoneyCave 2 deixa o modo em 0 e mesmo assim os
+    // sprites saem recortados no aparelho; quem respeita o modo e o vDrawObject).
+    void drawSpriteSlots(){
+        if(slotSprite==null) return;
+        boolean prev=spriteSlotDraw; spriteSlotDraw=true;
+        try { for(int i=0;i<spriteCount;i++) if(slotSprite[i]!=0) drawObject(slotX[i],slotY[i],slotSprite[i]); }
+        finally { spriteSlotDraw=prev; }
+    }
     // vSetActiveFont(pFont): le a struct VMGPFONT {u32 fontdata, u32 chartbl, u8 bpp,w,h,palindex}
     // e a torna a fonte ativa do vPrint. Devolve o ponteiro da fonte anterior (0 se nenhuma).
+    // vSetActiveFont(VMGPFONT*) guarda o PONTEIRO, nao uma copia da struct: o jogo pode reescrever os
+    // campos entre um vPrint e o outro sem chamar vSetActiveFont de novo (ver fontRefresh()).
     int setActiveFont(int ptr){
         int prev = aFontPtr;
         aFontPtr = ptr;
         if(ptr==0){ aFontData=aFontChartbl=aFontBpp=aFontW=aFontH=aFontPal=0; return prev; }
-        aFontData    = vm.read32(ptr+0);
-        aFontChartbl = vm.read32(ptr+4);
-        aFontBpp     = vm.read8(ptr+8);
-        aFontW       = vm.read8(ptr+9);
-        aFontH       = vm.read8(ptr+10);
-        aFontPal     = vm.read8(ptr+11);
+        fontRefresh();
         if(DRAWLOG) dlog("vSetActiveFont data=0x"+Integer.toHexString(aFontData)+" chartbl=0x"+Integer.toHexString(aFontChartbl)+" bpp="+aFontBpp+" "+aFontW+"x"+aFontH+" pal="+aFontPal);
         return prev;
     }
@@ -514,7 +883,20 @@ public final class Sdk {
     // significativo = pixel mais a esquerda), linhas contiguas, cada caractere alinhado a byte.
     // Fonte monocromatica (bpp=1): bit 1 = foreColor. 4-cores (bpp=2): indice 0 = transparente,
     // 1-3 = palette[palindex+indice]. Largura FIXA (por isso a fonte do sistema proporcional embaralhava).
+    // Rele a VMGPFONT apontada por aFontPtr. O Word Panic monta UMA struct de fonte e so troca o
+    // campo palindex antes de cada vPrint (mesmos glifos, paleta diferente p/ o rotulo e p/ os
+    // digitos do placar); guardar uma copia no vSetActiveFont congelava a paleta da chamada anterior.
+    void fontRefresh(){
+        if(aFontPtr==0) return;
+        aFontData    = vm.read32(aFontPtr+0);
+        aFontChartbl = vm.read32(aFontPtr+4);
+        aFontBpp     = vm.read8(aFontPtr+8);
+        aFontW       = vm.read8(aFontPtr+9);
+        aFontH       = vm.read8(aFontPtr+10);
+        aFontPal     = vm.read8(aFontPtr+11) & 0xff;
+    }
     void vPrint(int mode, int x, int y, String str){
+        fontRefresh();                                             // a struct pode ter mudado desde o vSetActiveFont
         if(aFontPtr==0 || aFontW<=0 || aFontH<=0){                 // sem fonte de usuario: cai na do sistema
             scr.drawText(x, y, str, getColor(foreColor)); return;
         }
@@ -522,6 +904,18 @@ public final class Sdk {
         int bpp=aFontBpp<=0?1:aFontBpp, mask=(1<<bpp)-1;
         int glyphBytes = (aFontW*aFontH*bpp + 7) >> 3;             // cada caractere alinhado a byte
         int fg = getColor(foreColor);
+        // `mode` e um TransferMode (vmgp.h XferModes): MODE_BLOCK(0) = "Block copy mode, NO transparency",
+        // MODE_TRANS(1) = indice 0 transparente. Ignorar isso quebra quem usa vPrint como se fosse um
+        // "printf opaco": o Graveyard Adventure reimprime TIME/AIR por cima do valor antigo a cada frame,
+        // contando com o modo bloco p/ apagar o anterior -- em modo transparente os digitos se somavam
+        // ate virar um bloco branco solido. Em bloco, o pixel 0 recebe o backColor (vSetBackColor).
+        boolean blockMode = (mode & 1)==0;
+        // Em bloco o indice 0 vira cor solida. Numa fonte MONOCROMATICA (bpp=1) nao ha paleta e a unica
+        // fonte de cor possivel e o backColor (e assim que o Graveyard Adventure apaga o TIME/AIR antigo).
+        // Numa fonte INDEXADA (bpp>=2) o indice 0 e uma entrada de paleta como qualquer outra: o Word
+        // Panic conta com isso p/ repintar o azul do interior da caixa do placar antes de escrever o
+        // digito -- usar o backColor (preto) enchia as caixas de preto.
+        int bg = (aFontBpp>1) ? scr.palette[aFontPal & 0xff] : getColor(backColor);
         int penX = x;
         for(int k=0;k<str.length();k++){
             int ch = str.charAt(k) & 0xff;
@@ -534,8 +928,9 @@ public final class Sdk {
                         int dx=penX+col; if(dx<scr.clipX0||dx>=scr.clipX1) continue;
                         int bitPos=(row*aFontW+col)*bpp;
                         int val=(vm.read8(base+(bitPos>>3)) >> (bitPos&7)) & mask;
-                        if(val==0) continue;                       // 0 = transparente (mono e 4-cores)
-                        int argb = (bpp==1) ? fg : scr.palette[(aFontPal+val)&0xff];
+                        int argb;
+                        if(val==0){ if(!blockMode) continue; argb=bg; }   // transparente, ou fundo em bloco
+                        else argb = (bpp==1) ? fg : scr.palette[(aFontPal+val)&0xff];
                         scr.put(dx,dy,argb);
                     }
                 }
@@ -603,29 +998,91 @@ public final class Sdk {
         return 0xff000000|(Math.round(r*255f/31)<<16)|(Math.round(g*255f/63)<<8)|Math.round(b*255f/31); }
 
     // NativeMapHeader(24B): flag,format,mapW,mapH,animSpd,animCnt,animActive,pad, s16 xPan,yPan,xPos,yPos, ptr mapData@16, ptr tileData@20
+    boolean mapDumped=false;
+    static final long mapDumpAt = System.getenv("MAPDUMPAT")!=null? Long.parseLong(System.getenv("MAPDUMPAT").trim()) : 0;
+    final java.util.HashSet<Integer> mapDumpedHdrs = new java.util.HashSet<Integer>(); int mapWhyN=0;
+    /** MAPDUMP=<prefixo>: grava UMA vez o cabecalho + mapData + tileData do tilemap ativo, p/ analisar
+     *  a decodificacao dos tiles fora do emulador. */
+    void mapDump(int hp,int mapW,int mapH,int cell,int tileBytes,int mapData,int tileData){
+        String pref=System.getenv("MAPDUMP"); if(pref==null) return;
+        // MAPDUMPAT=N: espera N desenhos antes de despejar (p/ pegar o estado JA corrompido).
+        if(mapDumpAt>0 && mapDraws<mapDumpAt) return;
+        if(!mapDumpedHdrs.add(hp)) return;                 // um dump por HEADER (jogos com 2+ camadas)
+        pref = pref + "_" + Integer.toHexString(hp);
+        try {
+            java.io.DataOutputStream o=new java.io.DataOutputStream(new java.io.BufferedOutputStream(
+                new java.io.FileOutputStream(pref+".bin")));
+            o.writeInt(mapW); o.writeInt(mapH); o.writeInt(cell); o.writeInt(tileBytes);
+            o.writeInt(vm.read8(hp)&0xff); o.writeInt(vm.read8(hp+1)&0xff);
+            int nmap=mapW*mapH*cell;
+            o.writeInt(nmap); for(int i=0;i<nmap;i++) o.writeByte(vm.read8(mapData+i)&0xff);
+            int ntile=256*tileBytes;
+            o.writeInt(ntile); for(int i=0;i<ntile;i++) o.writeByte(vm.read8(tileData+i)&0xff);
+            for(int i=0;i<256;i++) o.writeInt(scr.palette[i]);
+            o.close();
+            System.out.println("[MAPDUMP] "+mapW+"x"+mapH+" cell="+cell+" tileBytes="+tileBytes+" -> "+pref+".bin");
+        } catch(Exception e){}
+    }
     void drawMap(){
-        int hp=mapHeaderPtr; if(hp==0) return;
-        int flag=vm.read8(hp+0);
-        int mapW=vm.read8(hp+2), mapH=vm.read8(hp+3);
-        int animSpeed=vm.read8(hp+4);
-        int xPan=(short)vm.read16(hp+8), yPan=(short)vm.read16(hp+10);
-        int xPos=(short)vm.read16(hp+12), yPos=(short)vm.read16(hp+14);
-
-        int mapData=vm.read32(hp+16), tileData=vm.read32(hp+20);
-        if(mapW==0||mapH==0||mapData==0||tileData==0) return;
+        mapSync();
+        int hp=mapHeaderPtr;
+        mapDraws++;
+        if(!mhValid){ mapAborts++; if(System.getenv("MAPLOG")!=null && mapWhyN++<6) System.out.println("[MAPA] ABORTA sem tilemap valido"); return; }
+        int flag=mhFlag;
+        int mapW=mhW, mapH=mhH;
+        int animSpeed=mhAnim;
+        int xPan=mhXPan, yPan=mhYPan;
+        // xPos/yPos: ler com SINAL. O vmgp.h declara MAP_HEADER.x/y como uint16_t, e eu cheguei a
+        // normalizar por (valor & 0xffff) % tamanhoDoMapa por causa do Sweet Dreams -- ERRADO, e
+        // quebrou o City Auto: ele faz vMapSetXY(-20, ...) num mapa 48x48 (384px) e poe o clip em
+        // x[20..129], ou seja usa o -20 como deslocamento p/ alinhar a coluna 0 do mapa com a borda
+        // da area de jogo. Com o wrap (65516 % 384 = 236) o DESENHO ia parar noutro pedaco do mapa
+        // enquanto a COLISAO (o jogo le o mapa por vMapGetTile) continuava certa -> o caminhao batia
+        // em parede invisivel e passava por cima de casas. Regressao relatada pelo usuario.
+        int xPos=(short)mhXPos, yPos=(short)mhYPos;
+        int mapData=mhMapData, tileData=mhTileData;
         // ponteiros invalidos (fora da memoria da VM) -> nao desenha lixo (ex: menu do HC1 com mapData bogus)
-        if(mapData<vm.base || mapData>=vm.base+vm.mem.length || tileData<vm.base || tileData>=vm.base+vm.mem.length) return;
-        boolean hasAttr = flag!=0; int cell = hasAttr?2:1;
-        final int TW=8, TH=8, tileBytes=TW*TH;   // RGB332 8bpp = 64 bytes/tile
-        int fmt = vm.read8(hp+1);
+        if(mapData<vm.base || mapData>=vm.base+vm.mem.length || tileData<vm.base || tileData>=vm.base+vm.mem.length){ if(System.getenv("MAPLOG")!=null && mapWhyN++<6) System.out.println("[MAPA] ABORTA ponteiro fora da VM"); return; }
+        // Plano de atributos: MAP_USERATTRIBUTE(0x2) OU MAP_AUTOANIM(0x8) -- a animacao precisa de um
+        // byte por tile p/ saber quais animam, entao tambem intercala. Nao basta MAP_TRANSPARENT(0x1):
+        // um mapa so transparente tem passo 1. Medido no Chang's Orbhunt (flag=0x8, so AUTOANIM): com
+        // passo 1 caiam 59 das 130 celulas em "tile 0 = nao desenhar" (na verdade eram os bytes de
+        // atributo), o fundo de pergaminho do menu de selecao virava xadrez furado e o texto do menu
+        // anterior vazava pelos buracos. Com passo 2: ZERO celulas tile-0.
+        // REGRA DA VERSAO PUBLICADA: QUALQUER flag != 0 implica plano de atributos intercalado.
+        // Eu havia estreitado isso p/ (flag & 0xa) supondo que um mapa so-MAP_TRANSPARENT tivesse
+        // passo 1 -- premissa FALSA: a camada de HUD do Honey Cave 2 tem flag=0x1 e e intercalada.
+        // Com passo 1 o painel do placar virava farrapos (lia byte de atributo como tile).
+        boolean hasAttr = flag!=0; int cell = hasAttr?2:1;        final int TW=8, TH=8;
+        // O campo `format` do NativeMapHeader vale o mesmo que o de um sprite: o tile NAO e sempre 8bpp.
+        // Final Hit (T300) declara format=5 (Palette16, 4bpp): lendo 1 byte por pixel o ceu e a cidade
+        // saiam como RUIDO RGB (dobro de bytes por tile + indice de paleta errado). Com bpp do formato,
+        // jogos 8bpp (HC2/Gold Rush, fmt 6/7) ficam byte-a-byte identicos.
+        int fmt = mhFmt;
+        int bpp = bppOf(fmt), mask=(1<<bpp)-1;
+        int tileBytes = (TW*TH*bpp+7)/8;
         int[] pal = (fmt==7) ? scr.rgb332 : scr.palette;   // format 7 = RGB332 direto (paleta fixa); HC2 depende disso
-        boolean blackTransp = (flag & 1)!=0;               // TilemapFlags.Transparent: preto = transparente
+        // Transparencia de tile e propriedade POR TILE (bit no byte de atributo), HABILITADA pela flag
+        // MAP_TRANSPARENT(0x1) da camada: o vmgp.h diz "even if a tile has the transparency bit set its
+        // drawn as solid if this layer flag is not set". Tratar todo texel indice 0 como transparente so
+        // porque a camada tem a flag furava fundos solidos: no Shooting Star o tile da parede (usado na
+        // tela toda) tem 14 dos 64 texels no indice 0 -> esses pixels nunca eram repintados, o frame
+        // anterior vazava e os alvos deixavam rastro pontilhado vertical.
+        // Sem camada de atributos nao existe bit por tile -> mantem o comportamento antigo.
+        boolean layerTransp = (flag & 0x1)!=0;             // MAP_TRANSPARENT
         // rolagem: xPos/yPos = scroll do mapa; xPan/yPan = posicao na tela (% e / truncados, igual ao nofun)
         int startDrawX = xPan - (xPos % TW);
         int startDrawY = yPan - (yPos % TH);
         int tileStartX = xPos / TW, tileStartY = yPos / TH;
         int tilesAcross = (scr.w - startDrawX + TW-1)/TW + 1;
         int tilesDown   = (scr.h - startDrawY + TH-1)/TH + 1;
+        mapDump(hp,mapW,mapH,cell,tileBytes,mapData,tileData);
+        if(System.getenv("MAPLOG")!=null && mapWhyN++<400)
+            System.out.println("[MAPA] draw hdr=0x"+Integer.toHexString(hp)+" "+mapW+"x"+mapH
+                +" xPan="+xPan+" yPan="+yPan+" xPos="+xPos+" yPos="+yPos
+                +" -> startDraw("+startDrawX+","+startDrawY+") tileStart("+tileStartX+","+tileStartY+")"
+                +" tiles "+tilesAcross+"x"+tilesDown
+                +" | clip x["+scr.clipX0+".."+scr.clipX1+"] y["+scr.clipY0+".."+scr.clipY1+"]");
         for(int ry=0; ry<tilesDown; ry++){
             int my=tileStartY+ry; if(my<0||my>=mapH) continue;
             for(int rx=0; rx<tilesAcross; rx++){
@@ -634,15 +1091,47 @@ public final class Sdk {
                 int t=vm.read8(mapData+idx)&0xff;
                 if(t==0) continue; t-=1;                        // base-1; 0=vazio
                 int attr = hasAttr? vm.read8(mapData+idx+1)&0xff : 0;
-                if((attr&0x40)!=0) t += (frameAnimate%2);        // anima 2 frames
-                else if((attr&0x80)!=0) t += (frameAnimate%4);   // anima 4 frames
+                // O nibble ALTO do atributo significa coisas diferentes conforme o FORMATO do tile:
+                //  - Palette2/4/16 (fmt 3/4/5): e o BANCO DE PALETA (mesmo papel do palOff do sprite).
+                //    O indice do pixel so vai de 0..15, entao sem o banco tudo cai nas 16 primeiras
+                //    cores. Hugo Evil Mirror: as plataformas tem attr 65/81 (=64|1, 80|1) e sem o
+                //    banco saiam como riscos branco/azul em vez de madeira marrom.
+                //  - RGB332 (fmt 7) e cor DIRETA, nao ha paleta p/ indexar -> ali os bits 6/7 sao
+                //    os flags de ANIMACAO (Chang's 128, Diamond Hunter/Gold Rush 129, Hopper 141).
+                // Medido no acervo: todo mapa indexado que usa o nibble alto o usa em multiplos de 16
+                // e NUNCA liga o bit 7; todo mapa fmt=7 que usa o nibble alto liga o bit 7.
+                boolean bankFmt = (fmt==3||fmt==4||fmt==5);
+                int palBank = bankFmt ? (attr & 0xF0) : 0;
+                if(!bankFmt){
+                    if((attr&0x40)!=0) t += (frameAnimate%2);        // anima 2 frames
+                    else if((attr&0x80)!=0) t += (frameAnimate%4);   // anima 4 frames
+                }
                 int tp=tileData + t*tileBytes;
+                // O bit 0 do atributo do TILE vale sozinho, mesmo sem MAP_TRANSPARENT na camada.
+                // vmgp.h ("Differences since API version 1.30"): "Transparent flag for a layer is now
+                // actually used... even if a tile has the transparency bit set it's drawn as solid if
+                // this layer flag is not set" -- e logo abaixo: "The above changes do not take effect
+                // unless the API version is explicitly set in the game" (-mversion, opt-in). Ou seja,
+                // o PADRAO e o comportamento antigo: a flag da camada NAO veta o bit do tile.
+                // Medido em todo o acervo de teste: so 3 mapas tem bit0 sem MAP_TRANSPARENT --
+                // Evac 610 (396/396, cunhas pretas nos cantos da parede), Graveyard (56/1248) e
+                // Hopper (352/1600, sem diferenca visivel). Chang's, Diamond Hunter, Gold Rush,
+                // HoneyCave 1/2, Bone Idol, Sweet Dreams e Shooting Star tem ZERO -> intocados.
+                boolean tileTransp = (layerTransp && (!hasAttr || (attr & 0x1)!=0)) || (hasAttr && (attr & 0x1)!=0);
                 int sx=startDrawX+rx*TW, sy=startDrawY+ry*TH;
                 for(int j=0;j<TH;j++){ int dy=sy+j; if(dy<scr.clipY0||dy>=scr.clipY1) continue;
                     for(int i=0;i<TW;i++){ int dx=sx+i; if(dx<scr.clipX0||dx>=scr.clipX1) continue;
-                        int v=vm.read8(tp+j*TW+i)&0xff;
-                        int argb=pal[v];
-                        if(blackTransp && (argb&0xffffff)==0) continue;   // preto = transparente (mostra o fundo)
+                        int v, argb;
+                        if(bpp<=8){                                   // sub-byte e LSB-first, igual ao drawObject
+                            int bitPos=(j*TW+i)*bpp;
+                            v=(vm.read8(tp+(bitPos>>3)) >> (bitPos&7)) & mask;
+                            if(fmt==0||fmt==1||fmt==2){ int g=Math.round(v*255f/mask); argb=0xff000000|(g<<16)|(g<<8)|g; }
+                            else argb=pal[(v + palBank) & (pal.length-1)];
+                        } else {                                       // 16bpp direto
+                            v=vm.read16(tp+(j*TW+i)*2)&0xffff;
+                            argb=(fmt==8)? rgb565(v) : Screen.rgb555ToArgb(v);
+                        }
+                        if(tileTransp && (bpp<=8 ? v==0 : (argb&0xffffff)==0)) continue;   // cor-chave = indice 0
                         scr.put(dx,dy,argb);
                     }
                 }
@@ -653,19 +1142,29 @@ public final class Sdk {
     int frameAnimate=0, framePassed=0;
 
     int mapAttr(int x,int y){
-        int hp=mapHeaderPtr; if(hp==0) return 0;
-        if(vm.read8(hp+0)==0) return 0;                     // flag==0 => sem atributos
-        int mapW=vm.read8(hp+2), mapH=vm.read8(hp+3);
-        if(x<0||y<0||x>=mapW||y>=mapH) return 0;
-        int mapData=vm.read32(hp+16);
-        return vm.read8(mapData+(y*mapW+x)*2+1)&0xff;
+        mapSync(); if(!mhValid) return 0;
+        if(mhFlag==0) return 0;                             // sem plano de atributos
+        if(x<0||y<0||x>=mhW||y>=mhH) return 0;
+        return vm.read8(mhMapData+(y*mhW+x)*2+1)&0xff;
     }
     int mapTile(int x,int y){
-        int hp=mapHeaderPtr; if(hp==0) return 0;
-        int mapW=vm.read8(hp+2), mapH=vm.read8(hp+3);
-        if(x<0||y<0||x>=mapW||y>=mapH) return 0;
-        int cell = vm.read8(hp+0)==0?1:2;
-        return vm.read8(vm.read32(hp+16)+(y*mapW+x)*cell)&0xff;
+        mapSync(); if(!mhValid) return 0;
+        if(x<0||y<0||x>=mhW||y>=mhH) return 0;
+        int cell = (mhFlag!=0)?2:1;   // mesmo passo do drawMap: qualquer flag != 0
+        return vm.read8(mhMapData+(y*mhW+x)*cell)&0xff;
+    }
+    // setters simetricos aos getters: escrevem o tile (base-1) e o atributo no mapData da VM
+    void mapSetTile(int x,int y,int tile){
+        mapSync(); if(!mhValid) return;
+        if(x<0||y<0||x>=mhW||y>=mhH) return;
+        int cell = (mhFlag!=0)?2:1;   // mesmo passo do drawMap: qualquer flag != 0
+        vm.write8(mhMapData+(y*mhW+x)*cell, tile&0xff);
+    }
+    void mapSetAttr(int x,int y,int attr){
+        mapSync(); if(!mhValid) return;
+        if(mhFlag==0) return;                               // sem plano de atributos
+        if(x<0||y<0||x>=mhW||y>=mhH) return;
+        vm.write8(mhMapData+(y*mhW+x)*2+1, attr&0xff);
     }
 
     // extent de texto empacotado: bits altos = altura, bits baixos = largura (formato mophun)
@@ -687,10 +1186,42 @@ public final class Sdk {
     // entre dois locais. STRIDEPTR{ptr@0, xpan@4(u16), ypan@6(u16), stride@8(s16)}; ptr==0 = a TELA em (0,0).
     // Golf Pro Contest 1/2 desenham o MAPA/campo com isto (course 256x160 -> tela); antes era no-op -> chao
     // preto(Golf1)/magenta(Golf2). Tela = RGB332 (Screen.rgb332), buffers do jogo tb; converte byte->ARGB no fb.
+    static final boolean COPYDBG = System.getenv("COPYDBG")!=null;
+    int copyDbgN=0;
     void copyRect(int dS,int sS,int w,int h){
         w&=0xffff; h&=0xffff; if(w<=0||h<=0||w>4096||h>4096) return;
         int dP=vm.read32(dS), dX=(short)vm.read16(dS+4), dY=(short)vm.read16(dS+6), dStr=(short)vm.read16(dS+8);
         int sP=vm.read32(sS), sX=(short)vm.read16(sS+4), sY=(short)vm.read16(sS+6), sStr=(short)vm.read16(sS+8);
+        if(COPYDBG && copyDbgN++<6){
+            StringBuilder sb=new StringBuilder();
+            sb.append("[COPY] dst ptr=0x").append(Integer.toHexString(dP)).append(" xpan=").append(dX).append(" ypan=").append(dY).append(" stride=").append(dStr);
+            sb.append("  src ptr=0x").append(Integer.toHexString(sP)).append(" xpan=").append(sX).append(" ypan=").append(sY).append(" stride=").append(sStr);
+            sb.append("  ").append(w).append("x").append(h);
+            if(sP!=0){
+                sb.append(java.lang.System.lineSeparator());
+                for(int yy=0; yy<h; yy+=20){        // perfil do buffer de ORIGEM por altura
+                    int nz=0, n=0; int first=-1;
+                    for(int xx=0; xx<w; xx+=2){ int v=vm.read8(sP+sX+(sY+yy)*sStr+xx)&0xff; n++; if(v!=0){ nz++; if(first<0) first=v; } }
+                    sb.append("   linha ").append(yy).append(": nao-zero=").append(nz*100/Math.max(1,n)).append("%  1o valor=").append(first).append(java.lang.System.lineSeparator());
+                }
+                sb.append("  bytes:");
+                int[] hist=new int[256]; int n=0;
+                for(int yy=0; yy<h && yy<40; yy+=4) for(int xx=0; xx<w && xx<40; xx+=2){ hist[vm.read8(sP+sX+(sY+yy)*sStr+xx)&0xff]++; n++; }
+                for(int k=0;k<8;k++) sb.append(" ").append(vm.read8(sP+sX+sY*sStr+k)&0xff);
+                int top=0; for(int k=1;k<256;k++) if(hist[k]>hist[top]) top=k;
+                sb.append("  (indice mais comum=").append(top).append(" x").append(hist[top]).append("/").append(n);
+                sb.append("  paleta[").append(top).append("]=0x").append(Integer.toHexString(scr.palette[top]&0xffffff));
+                sb.append("  rgb332[").append(top).append("]=0x").append(Integer.toHexString(scr.rgb332[top]&0xffffff)).append(")");
+            }
+            System.out.println(sb);
+            if(sP!=0 && copyDbgN==1 && System.getenv("COPYDUMP")!=null){
+                try { java.io.FileOutputStream fo=new java.io.FileOutputStream(System.getenv("COPYDUMP"));
+                      int len=Math.abs(sStr)*h;
+                      for(int k=0;k<len;k++) fo.write(vm.read8(sP+k)&0xff);
+                      fo.close(); System.out.println("[COPYDUMP] "+len+" bytes (stride="+sStr+" h="+h+")");
+                } catch(Exception e){ System.out.println("[COPYDUMP] falhou: "+e); }
+            }
+        }
         boolean dScr=(dP==0), sScr=(sP==0);
         if(dScr && dStr==0) dStr=scr.w;
         if(sScr && sStr==0) sStr=scr.w;
@@ -707,14 +1238,41 @@ public final class Sdk {
     // ARGB do framebuffer -> indice RGB332 aproximado (p/ copias screen->system, raro)
     int argbToRgb332(int argb){ int r=(argb>>16)&0xff, g=(argb>>8)&0xff, bl=argb&0xff; return ((r>>5)<<5)|((g>>5)<<2)|(bl>>6); }
 
-    int itoa(int val,int buf,boolean signed){
+    // vitoa/vutoa(val, buf, len, pad): escreve o numero, completa ate 'len' com 'pad' e devolve o
+    // ponteiro para o ' ' final (o FIM), nao o inicio -- os jogos encadeiam a partir do retorno.
+    int itoa(int val,int buf,boolean signed,int len,int pad){
         String s = signed? Integer.toString(val) : Long.toString(val&0xffffffffL);
-        int i=0; for(;i<s.length();i++) vm.write8(buf+i, s.charAt(i)); vm.write8(buf+i,0); return buf;
+        int i=0; for(;i<s.length();i++) vm.write8(buf+i, s.charAt(i));
+        for(int k=s.length(); k<len; k++) vm.write8(buf+k, pad);
+        int nullPos = Math.max(s.length(), len);
+        vm.write8(buf+nullPos, 0);
+        return buf+nullPos;
     }
 
     // ---------------- vSprintf / vSprintfVa (printf estilo C) ----------------
     // vSprintf(buf, fmt, ...): varargs em p2,p3 e depois na PILHA (vm.arg cuida do split).
-    int sprintfReg(int buf,int fmt){ final int[] idx={2}; return sprintfImpl(buf, fmt, new java.util.function.IntSupplier(){ public int getAsInt(){ return vm.arg(idx[0]++); } }); }
+    static final boolean SPFDBG = System.getenv("SPFDBG")!=null;
+    int spfN=0;
+    void spfDump(int fmt){
+        if(!SPFDBG || spfN++>=10) return;
+        StringBuilder sb=new StringBuilder("[SPF] fmt=");
+        sb.append(readStr(fmt,false)).append(" | P2=").append(vm.arg(2)).append(" P3=").append(vm.arg(3));
+        int sp=vm.getReg(Pip2.SP);
+        for(int k=0;k<6;k++) sb.append("  SP+").append(k*4).append("=").append(vm.read32(sp+k*4));
+        System.out.println(sb);
+    }
+    // ABI do PIP2 (MophunAsmRef, secao 1.3.1): os quatro primeiros argumentos vao em $p0-$p3;
+    // os demais E TAMBEM os argumentos de funcoes stdarg (ellipsis) vao na PILHA.
+    // Logo, em vSprintf(buf,fmt,...) os args do ... nao estao em $p2/$p3: estao todos na
+    // pilha a partir de $sp+0. Liamos de $p2/$p3 e o Golf Pro Contest imprimia
+    // PAR 625608 | HOLE 2 em vez de PAR 4 | HOLE 1, e 194 YDS em vez de 378 YDS.
+    int sprintfReg(int buf,int fmt){
+        spfDump(fmt);
+        final int base = vm.getReg(Pip2.SP);
+        final int[] off = {0};
+        return sprintfImpl(buf, fmt, new java.util.function.IntSupplier(){
+            public int getAsInt(){ int v = vm.read32(base + off[0]); off[0] += 4; return v; } });
+    }
     // vSprintfVa(buf, fmt, ap): ap = ponteiro p/ o va_list (array de u32 na memoria da VM).
     int sprintfVa(int buf,int fmt,final int ap){ final int[] off={0}; return sprintfImpl(buf, fmt, new java.util.function.IntSupplier(){ public int getAsInt(){ int v=vm.read32(ap+off[0]); off[0]+=4; return v; } }); }
     int sprintfImpl(int buf,int fmt,java.util.function.IntSupplier args){
@@ -759,6 +1317,22 @@ public final class Sdk {
         return out.toString();
     }
 
+    // Vendor anunciado no deviceId do System caps. TUDO o que este emulador implementa e a variante
+    // SONY ERICSSON do mophun (som por vPlayResource->MIDI, framebuffer RGB332, ...) e o proprio
+    // vGetCaps(Sound) ja devolve config=3 (SE) FIXO para qualquer modelo. Anunciar outro vendor no
+    // System caps contradizia isso: o Honey Cave 2 le o vendor do deviceId e so toca musica se for 3.
+    // Como a caixa de resolucao da GUI escolhe junto o MODELO, pedir 176x208 selecionava "Nokia 7650"
+    // (vendor 4) e o jogo ficava MUDO -- parecia bug de resolucao, mas nao e: medido com autoplay,
+    // 60 chamadas de vPlayResource com vendor 3 contra 0 com vendor 4, nas DUAS resolucoes (128x160 e
+    // 176x208). O mesmo vale p/ 176x220 (Tiger, vendor 7). O MODELO continua honesto -- e ele que
+    // serve o CheckTerminal e a resolucao nativa; so o vendor passa a acompanhar o que de fato
+    // emulamos. Escape: TRUEVENDOR=1 reporta o vendor cru da tabela de modelos.
+    int capsVendor(){
+        if(System.getenv("TRUEVENDOR")!=null) return deviceVendor;
+        return SE_VENDOR;
+    }
+    static final int SE_VENDOR = 3;        // SystemDeviceVendor.SonyEricsson
+
     // vGetCaps(queryType, buffer): preenche a struct e retorna 1. Video: {u16 size,flags,width,height}
     int getCaps(int queryType,int buf){
         if(buf==0) return 0;
@@ -779,14 +1353,14 @@ public final class Sdk {
                 // "3D not supported!" se ausente; ja os 2D (Black Deal) comparam o flags inteiro e
                 // rejeitam bits altos. Como version150 = importa vInit3D, isso discrimina sem quebrar 2D.
                 vm.write16(buf+0, 8);
-                vm.write16(buf+2, videoFormat | (version150 ? 0x1000 : 0));
+                vm.write16(buf+2, videoFormat | ((version150 && System.getenv("NO3DCAP")==null) ? 0x1000 : 0));
                 vm.write16(buf+4, scr.w);
                 vm.write16(buf+6, scr.h);
                 return 1;
             case 4:  // System: {u16 size,flags, u32 deviceId, u32 vendorFlags}. deviceId=(model<<16)|vendor
                 vm.write16(buf+0, 12);
                 vm.write16(buf+2, 0x25);                       // Unicode|Vibrate|OpenURL
-                vm.write32(buf+4, (deviceModel<<16)|deviceVendor);
+                vm.write32(buf+4, (deviceModel<<16)|capsVendor());
                 vm.write32(buf+8, 0);
                 return 1;
             case 2:  // Sound: {u16 size,flags, u32 config}. vendor=3 -> HC2 liga o som (pool[65]=1)
@@ -794,10 +1368,13 @@ public final class Sdk {
                 vm.write16(buf+2, 0xFFFF);
                 vm.write32(buf+4, 3);
                 return 1;
-            case 3:  // Communication: {u16 size,flags}
-                vm.write16(buf+0, 8);
+            case 3:  // Communication: struct CAPSHDR {u16 size; u16 flags;} = SO 4 BYTES (vmgpcaps.h).
+                // Escreviamos 8 bytes aqui. O Martial Arts 3D reserva exatamente 4 bytes na PILHA p/ este
+                // buffer (STORE RA; ADDQ sp,-4; P1=sp), entao o write32(buf+4) caia em cima do ENDERECO DE
+                // RETORNO salvo, zerando-o: o RET saltava p/ 0 e a VM encerrava em 910 instrucoes -- parecia
+                // "main retornou". Escrever so os 4 bytes da struct resolve.
+                vm.write16(buf+0, 4);
                 vm.write16(buf+2, 0);
-                vm.write32(buf+4, 0);
                 return 1;
             default: // Input/etc
                 vm.write16(buf+0, 8);
@@ -812,21 +1389,65 @@ public final class Sdk {
     // Flags de File: 0x100=Read, 0x200=Write, 0x400=Create, 0x800=Truncate.
     int streamOpen(int namePtr, int mode){
         int type = mode & 0xFF;
-        if(type==7){                                  // Resource (dados do .mpn, somente leitura)
+        if(type==7){                                  // Resource (dados do .mpn)
+            // ATENCAO: recurso NAO e so leitura. Varios jogos (a familia *Pro Contest da
+            // Synergenix -- Rally, Golf, Football -- e outros 3D) guardam o PROGRESSO
+            // escrevendo de volta num recurso do proprio container, e nao num arquivo:
+            //     vStreamOpen(NULL, (res<<16) | 0x207)   // 0x200 = Write
+            //     vStreamOpen(NULL, (res<<16) | 0x707)   // Read|Write|Binary
+            // No aparelho o .mpn instalado e gravavel, entao isso persiste. Aqui a ROM e
+            // intocavel (e pode ate estar so-leitura no disco), por isso a escrita vai para
+            // uma SOBREPOSICAO por jogo em saveDir/res_<n>.bin -- e a leitura prefere a
+            // sobreposicao, se existir. Sem isto o jogo escrevia num buffer que era jogado
+            // fora no vStreamClose: o save sumia e so restava o save state.
             int resNum = mode>>>16;
-            if(SAVELOG) System.out.println("[RES] open resource #"+resNum+" (count="+vm.exe.resourceCount()+")"+(resNum>=vm.exe.resourceCount()?" -> FAIL":""));
-            if(resNum >= vm.exe.resourceCount()) return -1;
-            int off = vm.exe.resourceOffset(resNum), len = vm.exe.resourceLength(resNum);
-            byte[] data = new byte[len];
-            System.arraycopy(vm.exe.all, off, data, 0, len);
+            boolean write = (mode & SF_WRITE)!=0;
+            boolean zera  = (mode & (SF_TRUNC|SF_CREATE))!=0;
+            boolean naRom = resNum < vm.exe.resourceCount();
+            java.io.File ov = resSaveFile(resNum);
+            byte[] data;
+            if(write && zera)      data = new byte[0];          // regrava do zero
+            else if(ov.isFile()){                                // progresso ja salvo
+                try { data = readAllBytes(ov); } catch(Exception e){ return -1; }
+            }
+            else if(naRom){                                      // conteudo original da ROM
+                int off = vm.exe.resourceOffset(resNum), len = vm.exe.resourceLength(resNum);
+                data = new byte[len];
+                System.arraycopy(vm.exe.all, off, data, 0, len);
+            }
+            else if(write) data = new byte[0];                   // slot novo, so p/ gravar
+            else {
+                if(SAVELOG) System.out.println("[RES] open resource #"+resNum+" (count="+vm.exe.resourceCount()+") -> FAIL");
+                return -1;
+            }
+            if(SAVELOG) System.out.println("[RES] open resource #"+resNum+(write?" WRITE":" read")
+                +" bytes="+data.length+(ov.isFile()?" (sobreposicao)":"")); 
             int fd = nextFd++;
             streamData.put(fd, data); streamPos.put(fd, new int[]{0});
+            if(write){ streamFile.put(fd, ov); streamWritable.put(fd, true); }   // persiste a cada write
             return fd;
         }
-        // type 0 = File: save game em disco ("resume" = estado do jogo, "highscore" = recordes)
+        // type 0 = File.
         String nm = readStr(namePtr, false);
+        boolean writing = (mode & SF_WRITE)!=0;
+        // ARQUIVO EMBUTIDO (ZIP no .mpn): em abertura de LEITURA, resolve nomes de asset e o proprio ".mpc".
+        // Ex.: Da Vinci Code abre "dvc.mpc" (container inteiro) e depois cada asset por nome
+        // ("characters/RobertLangdon/RobertLangdon-001.psk", "levels/0_TheHotel.clevel"). Sem isso o jogo
+        // recebia arquivos vazios -> nenhuma geometria (tela preta).
+        if(!writing && vm.exe.hasArchive()){
+            byte[] emb = null;
+            String low = nm.toLowerCase();
+            if(low.endsWith(".mpc")) emb = vm.exe.archiveBytes();   // container inteiro
+            else                     emb = vm.exe.vfsGet(nm);        // entrada por nome
+            if(emb != null){
+                int fd = nextFd++;
+                streamData.put(fd, emb); streamPos.put(fd, new int[]{0});
+                if(SAVELOG) System.out.println("[VFS] '"+nm+"' -> "+emb.length+" bytes (embutido)");
+                return fd;
+            }
+        }
         if(SAVELOG) System.out.println("[SAVE] open File '"+nm+"' mode=0x"+Integer.toHexString(mode)
-            +((mode&SF_WRITE)!=0?" WRITE":" read"));
+            +(writing?" WRITE":" read"));
         return fileOpen(nm, mode);
     }
 
@@ -843,10 +1464,22 @@ public final class Sdk {
         boolean trunc  = (mode & SF_TRUNC)!=0;
         java.io.File f = saveFile(name);
         byte[] data;
+        // O companheiro/arquivo embutido tambem vale para ABERTURA DE ESCRITA: no aparelho o
+        // arquivo JA EXISTE, entao um jogo que abre Read|Write para ATUALIZAR um arquivo de dados
+        // tem de receber o conteudo dele, nao um arquivo vazio. So Create/Trunc comecam do zero.
+        java.io.File companion = (!create && !trunc) ? findCompanion(name) : null;
+        byte[] embutido = (!create && !trunc && companion==null && vm.exe.hasArchive())
+                        ? vm.exe.vfsGet(name) : null;
         if(create || trunc){             // Create/Trunc: comeca vazio (regrava do zero)
             data = new byte[0];
-        } else if(f.isFile()){           // arquivo existe: carrega conteudo
+        } else if(f.isFile()){           // save existente: carrega conteudo
             try { data = readAllBytes(f); } catch(Exception e){ return -1; }
+        } else if(companion!=null){      // ARQUIVO DE DADOS COMPANHEIRO ao lado da ROM
+            try { data = readAllBytes(companion); } catch(Exception e){ return -1; }
+            if(SAVELOG) System.out.println("[DADOS] '"+name+"' carregado de "+companion+" ("+data.length+" bytes)");
+        } else if(embutido!=null){       // arquivo embutido no .mpn (VFS/ZIP)
+            data = embutido;
+            if(SAVELOG) System.out.println("[DADOS] '"+name+"' carregado do VFS embutido ("+data.length+" bytes)");
         } else if(write){                // gravavel sem existir -> OpenOrCreate (nofun): cria vazio
             data = new byte[0];
         } else if((mode & SF_BINARY)!=0 && (mode & SF_EXCL)==0){
@@ -876,6 +1509,27 @@ public final class Sdk {
             java.io.FileOutputStream out = new java.io.FileOutputStream(f);
             try { out.write(data!=null? data : new byte[0]); } finally { out.close(); }
         } catch(Exception e){ System.err.println("[save] failed to write "+f+": "+e); }
+    }
+
+    // Pasta da ROM: varios jogos mophun sao distribuidos com ARQUIVOS DE DADOS COMPANHEIROS ao lado do
+    // .mpn (ex.: "dvc.mpc" do Da Vinci Code, "VRally2_extrapack1.mpc", "Microw0.mpc", "DragonTale_Chars.mpc").
+    // O jogo os abre por nome via vStreamOpen; sem procura-los aqui, so olhavamos em saveDir/<nome>.sav e o
+    // jogo recebia um arquivo VAZIO -> ficava sem modelos/niveis (tela preta). Somente LEITURA.
+    public java.io.File romDir;
+    java.io.File findCompanion(String name){
+        if(romDir==null || name==null || name.isEmpty()) return null;
+        if(name.indexOf((char)47)>=0 || name.indexOf((char)92)>=0 || name.contains("..")) return null;   // so nome simples (sem / \ ..)
+        java.io.File exact = new java.io.File(romDir, name);
+        if(exact.isFile()) return exact;
+        java.io.File[] list = romDir.listFiles();                 // fallback: casa ignorando caixa
+        if(list!=null) for(java.io.File c : list) if(c.isFile() && c.getName().equalsIgnoreCase(name)) return c;
+        return null;
+    }
+
+    /** Sobreposicao gravavel de um RECURSO (save nativo dos jogos que gravam no container). */
+    java.io.File resSaveFile(int resNum){
+        if(!saveDir.exists()) saveDir.mkdirs();
+        return new java.io.File(saveDir, "res_"+resNum+".bin");
     }
 
     // mapeia o nome logico do jogo ("resume"/"highscore") p/ um arquivo seguro em saveDir
@@ -1011,6 +1665,7 @@ public final class Sdk {
     // vPlayResource(data, length, flags): tipo=flags&0xF, loop=0x100, stream=0x200, stop=0x400
     int playResource(int data,int length,int flags){
         try {
+            if(System.getenv("SNDLOG")!=null) System.out.println("[SND] play len="+length);
             if((flags & 0x400)!=0){ stopSound(); return 1; }   // Stop
             if(!soundEnabled) return 1;                         // som desligado (Settings)
             byte[] bytes;
@@ -1044,11 +1699,21 @@ public final class Sdk {
     static final int STATE_MAGIC = 0x4D505631;    // "MPV1" (antigo, sem tick)
     static final int STATE_MAGIC2 = 0x4D505632;   // "MPV2" (com base de tempo)
     static final int STATE_MAGIC3 = 0x4D505633;   // "MPV3" (+framebuffer, p/ fundo persistente das corridas)
+    static final int STATE_MAGIC5 = 0x4D505635;   // "MPV5" (+estado do pipeline 3D: matrizes/viewport/render states)
+    static final int STATE_MAGIC4 = 0x4D505634;   // "MPV4" (+metadados do allocator: free list — p/ o detector de leak sobreviver a save/load)
+    static final int STATE_MAGIC6 = 0x4D505636;   // "MPV6" (+luzes/ambiente/material: MPV5 perdia todas as luzes ao carregar)
+    static final int STATE_MAGIC7 = 0x4D505637;   // "MPV7" (+texturas gerenciadas: MPV6 perdia o mapa de handles do vCreateTexture)
+    static final int STATE_MAGIC8 = 0x4D505638;   // "MPV8" (+copia do MAP_HEADER: o ponteiro do jogo pode morrer)
+    // "MPV9" (+ponteiro da fonte ativa do jogo). O vSetActiveFont guarda so um PONTEIRO para a struct
+    // VMGPFONT, que vive na memoria da VM (essa sim era salva). Sem persistir o ponteiro, ao retomar um
+    // estado o aFontPtr voltava a 0 e o vPrint caia na fonte do SISTEMA: no Honey Cave 2 o placar do HUD
+    // ("20" / "31020") saia como blocos brancos. Os demais campos sao derivados -> fontRefresh() relê.
+    static final int STATE_MAGIC9 = 0x4D505639;
     public void saveState(java.io.File f) throws java.io.IOException {
         java.io.DataOutputStream o = new java.io.DataOutputStream(
             new java.io.BufferedOutputStream(new java.io.FileOutputStream(f)));
         try {
-            o.writeInt(STATE_MAGIC3);
+            o.writeInt(STATE_MAGIC9);
             o.writeInt(vm.R.length);
             for(int i=0;i<vm.R.length;i++) o.writeInt(vm.R[i]);
             o.writeInt(vm.mem.length); o.write(vm.mem);
@@ -1061,6 +1726,22 @@ public final class Sdk {
             o.writeLong(System.currentTimeMillis()-tick0);   // vGetTickCount atual (base de tempo)
             o.writeInt(scr.fb.length);                        // framebuffer (fundo persistente desenhado 1x)
             for(int i=0;i<scr.fb.length;i++) o.writeInt(scr.fb[i]);
+            // metadados do allocator (MPV4): sem isto, apos um load os blocos alocados antes do save ficavam
+            // "desconhecidos" -> free deles virava no-op -> o detector de leak (Deep Abyss) reaparecia.
+            o.writeInt(freeBytes);
+            o.writeInt(liveBlocks.size());
+            for(java.util.Map.Entry<Integer,Integer> e : liveBlocks.entrySet()){ o.writeInt(e.getKey()); o.writeInt(e.getValue()); }
+            o.writeInt(freeList.size());
+            for(int[] b : freeList){ o.writeInt(b[0]); o.writeInt(b[1]); }
+            r3d.saveState3D(o);          // MPV5: pipeline 3D (projecao/camera/viewport/render states)
+            r3d.saveLights(o);           // MPV6: luzes/ambiente/material
+            r3d.saveTextures(o);         // MPV7: texturas gerenciadas (handles do vCreateTexture)
+            // MPV8: copia do MAP_HEADER (o buffer do jogo pode ja estar morto na hora do save)
+            o.writeBoolean(mhValid);
+            o.writeInt(mhFlag); o.writeInt(mhFmt); o.writeInt(mhW); o.writeInt(mhH); o.writeInt(mhAnim);
+            o.writeInt(mhXPan); o.writeInt(mhYPan); o.writeInt(mhXPos); o.writeInt(mhYPos);
+            o.writeInt(mhMapData); o.writeInt(mhTileData);
+            o.writeInt(aFontPtr);        // MPV9: fonte bitmap ativa do jogo
         } finally { o.close(); }
     }
     public void loadState(java.io.File f) throws java.io.IOException {
@@ -1068,11 +1749,12 @@ public final class Sdk {
             new java.io.BufferedInputStream(new java.io.FileInputStream(f)));
         try {
             int magic=in.readInt();
-            if(magic!=STATE_MAGIC && magic!=STATE_MAGIC2 && magic!=STATE_MAGIC3) throw new java.io.IOException("invalid state");
+            if(magic!=STATE_MAGIC && magic!=STATE_MAGIC2 && magic!=STATE_MAGIC3 && magic!=STATE_MAGIC4 && magic!=STATE_MAGIC5 && magic!=STATE_MAGIC6 && magic!=STATE_MAGIC7 && magic!=STATE_MAGIC8 && magic!=STATE_MAGIC9) throw new java.io.IOException("invalid state");
             int nr=in.readInt(); for(int i=0;i<nr;i++){ int v=in.readInt(); if(i<vm.R.length) vm.R[i]=v; }
             int ml=in.readInt(); byte[] m=new byte[ml]; in.readFully(m);
             System.arraycopy(m,0,vm.mem,0,Math.min(ml,vm.mem.length));
             nextHeap=in.readInt(); foreColor=in.readInt(); backColor=in.readInt(); transferMode=in.readInt();
+            liveBlocks.clear(); freeList.clear(); freeBytes=0;   // metadados do allocator nao sao serializados
             rngState=in.readLong();
             mapHeaderPtr=in.readInt(); mapX=in.readInt(); mapY=in.readInt();
             // restaura o estado de sprites AUTO-CONTIDO: realoca os arrays (senao crasha se carregado
@@ -1084,13 +1766,28 @@ public final class Sdk {
             for(int i=0;i<256;i++) scr.palette[i]=in.readInt();
             // base de tempo: sem isso o jogo trava em while(vGetTickCount()<alvo). MPV2 tem o tick salvo;
             // saves antigos (MPV1) nao -> pula 1h pra frente pra satisfazer qualquer alvo pendente.
-            if(magic==STATE_MAGIC2 || magic==STATE_MAGIC3){ long savedTick=in.readLong(); tick0=System.currentTimeMillis()-savedTick; }
+            if(magic==STATE_MAGIC2 || magic==STATE_MAGIC3 || magic==STATE_MAGIC4 || magic==STATE_MAGIC5 || magic==STATE_MAGIC6 || magic==STATE_MAGIC7 || magic==STATE_MAGIC8 || magic==STATE_MAGIC9){ long savedTick=in.readLong(); tick0=System.currentTimeMillis()-savedTick; }
             else { tick0=System.currentTimeMillis()-3600000L; }
-            if(magic==STATE_MAGIC3){                          // restaura o framebuffer (fundo persistente)
+            if(magic==STATE_MAGIC3 || magic==STATE_MAGIC4 || magic==STATE_MAGIC5 || magic==STATE_MAGIC6 || magic==STATE_MAGIC7 || magic==STATE_MAGIC8 || magic==STATE_MAGIC9){   // restaura o framebuffer (fundo persistente)
                 int fl=in.readInt();
                 boolean apply = (fl==scr.fb.length);          // so aplica se o render-scale bater (senao os tamanhos diferem)
                 for(int i=0;i<fl;i++){ int v=in.readInt(); if(apply) scr.fb[i]=v; }
             }
+            if(magic==STATE_MAGIC4 || magic==STATE_MAGIC5 || magic==STATE_MAGIC6 || magic==STATE_MAGIC7 || magic==STATE_MAGIC8 || magic==STATE_MAGIC9){    // metadados do allocator (free list)
+                freeBytes=in.readInt();
+                int nlive=in.readInt(); for(int i=0;i<nlive;i++){ int p=in.readInt(), s=in.readInt(); liveBlocks.put(p,s); }
+                int nfree=in.readInt(); for(int i=0;i<nfree;i++){ int p=in.readInt(), s=in.readInt(); freeList.add(new int[]{p,s}); }
+            }
+            if(magic==STATE_MAGIC5 || magic==STATE_MAGIC6 || magic==STATE_MAGIC7 || magic==STATE_MAGIC8 || magic==STATE_MAGIC9) r3d.loadState3D(in);   // pipeline 3D (sem isto a projecao voltava p/ identidade)
+            if(magic==STATE_MAGIC6 || magic==STATE_MAGIC7 || magic==STATE_MAGIC8 || magic==STATE_MAGIC9) r3d.loadLights(in);       // luzes/ambiente/material (MPV5 os perdia)
+            if(magic==STATE_MAGIC7 || magic==STATE_MAGIC8 || magic==STATE_MAGIC9) r3d.loadTextures(in);     // handles do vCreateTexture (MPV6 os perdia -> textura errada em tudo)
+            if(magic==STATE_MAGIC8 || magic==STATE_MAGIC9){
+                mhValid=in.readBoolean();
+                mhFlag=in.readInt(); mhFmt=in.readInt(); mhW=in.readInt(); mhH=in.readInt(); mhAnim=in.readInt();
+                mhXPan=in.readInt(); mhYPan=in.readInt(); mhXPos=in.readInt(); mhYPos=in.readInt();
+                mhMapData=in.readInt(); mhTileData=in.readInt();
+            } else mhValid=false;   // saves antigos: reconstroi do header se ele ainda estiver vivo
+            if(magic==STATE_MAGIC9){ aFontPtr=in.readInt(); fontRefresh(); }   // fonte ativa do jogo
         } finally { in.close(); }
     }
 
@@ -1099,9 +1796,13 @@ public final class Sdk {
 
     // Descomprime LZ lendo o fluxo de um stream (source==0 no vDecompress). dest fica na memoria da VM.
     int decompressStream(int handle,int dest){
-        byte[] s = streamData.get(handle); if(s==null) return -1;
+        byte[] s = streamData.get(handle);
+        boolean dbg = System.getenv("DECDBG")!=null;
+        if(s==null){ if(dbg) System.out.println("[DEC] handle="+handle+" SEM STREAM"); return -1; }
         int[] pp = streamPos.get(handle); int off = pp[0];
-        if(s.length-off < 22 || s[off]!='L' || s[off+1]!='Z') return -1;
+        if(dbg){ StringBuilder h=new StringBuilder(); for(int k=0;k<8 && off+k<s.length;k++) h.append(String.format("%02x ",s[off+k]));
+            System.out.println("[DEC] handle="+handle+" tam="+s.length+" pos="+off+" bytes="+h+" magic="+((off+1<s.length)?(""+(char)s[off]+(char)s[off+1]):"?")); }
+        if(s.length-off < 22 || s[off]!='L' || s[off+1]!='Z'){ if(dbg) System.out.println("[DEC]   -> REJEITADO (sem magic LZ)"); return -1; }
         int maxB=s[off+2]&0xff, extB=s[off+3]&0xff;
         int usize=u32le(s,off+4), csize=u32le(s,off+8);
         ByteBits bs = new ByteBits(s, off+22, csize);
@@ -1117,6 +1818,7 @@ public final class Sdk {
             } else { vm.write8(dest+dp, bs.read(8)); dp++; }
         }
         pp[0] = off + 22 + csize;
+        if(dbg) System.out.println("[DEC]   -> dp="+dp+" usize="+usize+" csize="+csize+" dest=0x"+Integer.toHexString(dest));
         return dp;
     }
     // leitor de bits MSB-first sobre um byte[] (mesma semantica de LZBits, mas fonte em array)

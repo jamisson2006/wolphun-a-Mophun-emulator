@@ -43,6 +43,7 @@ public final class Lang {
         p("ap.bg","Background","Fondo","Hintergrund","Fundo","Тло","Фон");
         p("ap.text","Text","Texto","Text","Texto","Текст","Текст");
         p("ap.accent","Accent","Acento","Akzent","Destaque","Акцент","Акцент");
+        p("ap.exact","Use the exact color (no contrast fix)","Usar el color exacto (sin ajuste de contraste)","Exakte Farbe verwenden (ohne Kontrastkorrektur)","Usar a cor exata (sem ajuste de contraste)","\u0412\u0438\u043a\u043e\u0440\u0438\u0441\u0442\u043e\u0432\u0443\u0432\u0430\u0442\u0438 \u0442\u043e\u0447\u043d\u0438\u0439 \u043a\u043e\u043b\u0456\u0440","\u0418\u0441\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u044c \u0442\u043e\u0447\u043d\u044b\u0439 \u0446\u0432\u0435\u0442");
         p("ap.panel","Panels","Paneles","Panels","Painéis","Панелі","Панели");
         p("ap.restart","The \"System\" theme fully applies after restarting.","El tema \"Sistema\" se aplica por completo al reiniciar.","Das Thema \"System\" wird nach einem Neustart vollständig übernommen.","O tema \"Sistema\" é aplicado por completo ao reiniciar.","Тема «Система» повністю застосується після перезапуску.","Тема «Система» полностью применится после перезапуска.");
         p("theme.system","System (native)","Sistema (nativo)","System (nativ)","Sistema (nativo)","Системна","Системная");
@@ -66,6 +67,8 @@ public final class Lang {
         p("about.firstbeta","public beta","beta pública","öffentliche Beta","beta pública","публічна бета","публичная бета");
         p("about.developer","Developer","Desarrollador","Entwickler","Desenvolvedor","Розробник","Разработчик");
         p("about.studio","Studio","Estudio","Studio","Estúdio","Студія","Студия");
+        p("about.support","Support the project","Apoya el proyecto","Unterstütze das Projekt","Apoie o projeto","Підтримати проєкт","Поддержать проект");
+        p("about.scan","Scan the code or click the link","Escanea el código o haz clic en el enlace","Code scannen oder auf den Link klicken","Escaneie o código ou clique no link","Скануйте код або натисніть на посилання","Отсканируйте код или нажмите на ссылку");
         // ---- biblioteca / botoes ----
         p("lbl.search","Search:","Buscar:","Suche:","Buscar:","Пошук:","Поиск:");
         p("lbl.version","Version:","Versión:","Version:","Versão:","Версія:","Версия:");
@@ -84,11 +87,26 @@ public final class Lang {
         p("lbl.gamma","Brightness (gamma):","Brillo (gamma):","Helligkeit (Gamma):","Brilho (gamma):","Яскравість (гама):","Яркость (гамма):");
         p("lbl.fontsize","In-game font size:","Tamaño de fuente (juego):","Schriftgröße (Spiel):","Tamanho da fonte (jogo):","Розмір шрифту (гра):","Размер шрифта (игра):");
         p("lbl.hd","3D render scale (HD):","Escala de render 3D (HD):","3D-Renderskalierung (HD):","Escala de render 3D (HD):","Масштаб рендера 3D (HD):","Масштаб рендера 3D (HD):");
+        p("lbl.texfilter","3D texture filter:","Filtro de textura 3D:","3D-Texturfilter:","Filtro de textura 3D:","Фільтр текстур 3D:","Фильтр текстур 3D:");
+        p("tf.game","Follow the game","Seguir el juego","Dem Spiel folgen","Seguir o jogo","Слідувати грі","Следовать игре");
+        p("tf.linear","Bilinear (smooth)","Bilineal (suave)","Bilinear (weich)","Bilinear (suave)","Білінійний (згладжений)","Билинейный (сглаженный)");
+        p("tf.nearest","Nearest (sharp)","Cercano (nitido)","Nearest (scharf)","Nearest (nitido)","Найближчий (різкий)","Ближайший (резкий)");
         p("lbl.language","Language:","Idioma:","Sprache:","Idioma:","Мова:","Язык:");
         p("dlg.video","Settings","Configuración","Einstellungen","Configurações","Налаштування","Настройки");
         // ---- janela do jogo ----
         p("gw.pause","Pause","Pausar","Pause","Pausar","Пауза","Пауза");
         p("gw.resume","Resume","Reanudar","Fortsetzen","Retomar","Продовжити","Продолжить");
+        p("gw.maximize","Maximize window","Maximizar ventana","Fenster maximieren","Maximizar janela",
+            "\u0420\u043e\u0437\u0433\u043e\u0440\u043d\u0443\u0442\u0438 \u0432\u0456\u043a\u043d\u043e",
+            "\u0420\u0430\u0437\u0432\u0435\u0440\u043d\u0443\u0442\u044c \u043e\u043a\u043d\u043e");
+        // ---- captura de tela ----
+        p("gw.screenshot","Screenshot","Captura de pantalla","Bildschirmfoto","Captura de tela","Знімок екрана","Снимок экрана");
+        p("shot.game","Game only (no black bars)","Sólo el juego (sin barras negras)","Nur das Spiel (ohne schwarze Balken)","Só o jogo (sem barras preta)","Лише гра (без чорних смуг)","Только игра (без чёрных полос)");
+        p("shot.full","Whole window (with black bars)","Ventana completa (con barras negras)","Ganzes Fenster (mit schwarzen Balken)","Janela inteira (com as barras preta)","Усе вікно (з чорними смугами)","Всё окно (с чёрными полосами)");
+        p("shot.open","Open screenshots folder","Abrir la carpeta de capturas","Ordner mit Bildschirmfotos öffnen","Abrir a pasta de capturas","Відкрити теку знімків","Открыть папку снимков");
+        p("shot.saved","screenshot {0}×{1} saved","captura {0}×{1} guardada","Bildschirmfoto {0}×{1} gespeichert","captura {0}×{1} salva","знімок {0}×{1} збережено","снимок {0}×{1} сохранён");
+        p("shot.fail","Could not save the screenshot:","No se pudo guardar la captura:","Bildschirmfoto konnte nicht gespeichert werden:","Não foi possível salvar a captura:","Не вдалося зберегти знімок:","Не удалось сохранить снимок:");
+        p("shot.notready","Nothing drawn yet — wait for the game to show up.","Aún no hay nada dibujado — espera a que el juego aparezca.","Noch nichts gezeichnet — warte, bis das Spiel erscheint.","Nada desenhado ainda — espere o jogo aparecer.","Ще нічого не намальовано — дочекайтеся гри.","Ещё ничего не нарисовано — дождитесь игры.");
         p("gw.restart","Restart","Reiniciar","Neustart","Reiniciar","Перезапуск","Перезапуск");
         p("gw.savestate","Save state","Guardar estado","Zustand speichern","Salvar estado","Зберегти стан","Сохранить состояние");
         p("gw.loadstate","Load state","Cargar estado","Zustand laden","Carregar estado","Завантажити стан","Загрузить состояние");

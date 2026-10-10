@@ -104,12 +104,16 @@ public final class Pip2 {
             Vmgp.PoolItem it = exe.pool[i];
             if(it.type==3 && "~C".equals(exe.getString(it.meta))){ listAddr = poolValue[i]; break; }
         }
-        if(listAddr<0) return;                       // sem construtores globais
+        boolean log = System.getenv("CTORLOG")!=null;
+        if(listAddr<0){ if(log) System.out.println("[CTOR] sem lista ~C"); return; }
         int addr = (int)listAddr;
+        if(log) System.out.printf("[CTOR] lista ~C em 0x%x%n", addr);
         for(int n=0; n<256; n++){                     // enderecos absolutos ate o terminador 0
             int ctor = read32(addr); addr += 4;
             if(ctor==0) break;
+            long i0=instr;
             callFunction(ctor);
+            if(log) System.out.printf("[CTOR] #%d -> 0x%x  (%d instrucoes, parado=%s)%n", n, ctor, instr-i0, stopped);
         }
     }
     // Chama uma funcao da VM (PC=fn, RA=sentinela) e roda ate ela retornar. Preserva/restaura o estado.
@@ -127,7 +131,17 @@ public final class Pip2 {
     public int  read8 (int a){ int i=idx(a); return (i>=0&&i<mem.length)? (mem[i]&0xff):0; }
     public int  read16(int a){ return read8(a)|(read8(a+1)<<8); }
     public int  read32(int a){ return read8(a)|(read8(a+1)<<8)|(read8(a+2)<<16)|(read8(a+3)<<24); }
-    public void write8 (int a,int v){ int i=idx(a); if(i>=0&&i<mem.length) mem[i]=(byte)v; }
+    // DEBUG (env WWATCH=0xADDR): loga quem escreve num endereco — acha o codigo que corrompe um campo.
+    public int wwatch = System.getenv("WWATCH")!=null ? (int)Long.decode(System.getenv("WWATCH").trim()).longValue() : 0;
+    public int wwatchLen = System.getenv("WWATCHLEN")!=null? Integer.parseInt(System.getenv("WWATCHLEN").trim()) : 4;
+    public int wwatchHits = 0;
+    static final int WWMAX = System.getenv("WWMAX")!=null? Integer.parseInt(System.getenv("WWMAX").trim()) : 60;
+    public void write8 (int a,int v){ int i=idx(a); if(i>=0&&i<mem.length) mem[i]=(byte)v;
+        if(wwatch!=0 && a>=wwatch && a<wwatch+wwatchLen && wwatchHits<WWMAX){
+            wwatchHits++;
+            System.out.printf("[WW] escreve @0x%x = 0x%02x  PC=0x%x RA=0x%x fp=0x%x instr=%d%n",
+                a, v&0xff, R[PC>>2], R[RA>>2], R[FP>>2], instr);
+        } }
     public void write16(int a,int v){ write8(a,v); write8(a+1,v>>8); }
     public void write32(int a,int v){ write8(a,v); write8(a+1,v>>8); write8(a+2,v>>16); write8(a+3,v>>24); }
 
@@ -155,6 +169,156 @@ public final class Pip2 {
     }
 
     // ================= execucao =================
+    // ---------------- DEPURADOR: rastreio de PC com dump de registradores ----------------
+    // PCTRACE=0x25d7c,0x25e08  -> a cada vez que o PC chega num desses enderecos, imprime os
+    // registradores-chave e tenta ler cada um como string (revela ponteiros de nome/caminho).
+    // PCTRACEMAX=N limita o numero de dumps (padrao 40). Ferramenta generica de diagnostico:
+    // serve p/ qualquer jogo onde um argumento "some" entre chamadas.
+    public int[] pcTraceAddrs = parsePcTrace();
+    public int pcTraceMax = System.getenv("PCTRACEMAX")!=null? Integer.parseInt(System.getenv("PCTRACEMAX").trim()) : 40;
+    public int pcTraceHits = 0;
+    // ITRACE=lo-hi: imprime cada instrucao executada cuja PC caia na faixa, com os registradores
+    // de d/s/t resolvidos. Ferramenta de desmontagem VIVA (mostra os valores reais, nao so o codigo).
+    static int[] itRange(){ String v=System.getenv("ITRACE"); if(v==null) return new int[]{0,0};
+        String[] q=v.split("-"); return new int[]{(int)Long.decode(q[0].trim()).longValue(), (int)Long.decode(q[1].trim()).longValue()}; }
+    static final int[] ITR = itRange(); static final int ITLO=ITR[0], ITHI=ITR[1];
+    static final int ITMAX = System.getenv("ITMAX")!=null? Integer.parseInt(System.getenv("ITMAX").trim()) : 200;
+    int itN=0;
+    private static int[] parsePcTrace(){
+        String v = System.getenv("PCTRACE");
+        if(v==null || v.trim().isEmpty()) return null;
+        String[] parts = v.trim().split(",");
+        int[] r = new int[parts.length];
+        for(int i=0;i<parts.length;i++) r[i]=(int)Long.decode(parts[i].trim()).longValue();
+        return r;
+    }
+    private String peekStr(int addr){
+        if(addr<=0) return null;
+        StringBuilder sb=new StringBuilder();
+        for(int k=0;k<32;k++){
+            int i=idx(addr+k);
+            if(i<0||i>=mem.length) return null;
+            int c=mem[i]&0xff;
+            if(c==0) break;
+            if(c<32||c>126) return null;
+            sb.append((char)c);
+        }
+        return sb.length()>0 ? sb.toString() : "<vazio>";
+    }
+    private void pcTraceDump(int pc){
+        pcTraceHits++;
+        StringBuilder sb=new StringBuilder();
+        sb.append(String.format("[PCT] PC=0x%x instr=%d  SP=0x%x RA=0x%x%n", pc, instr, R[SP>>2], R[RA>>2]));
+        int[] regs = {1,2,3,4,5,6,7,12,13,14,15,30};           // r1..r30 relevantes (numeros de registrador)
+        for(int rn : regs){
+            int v = R[rn];
+            String st = peekStr(v);
+            sb.append(String.format("      r%-2d = %-12d (0x%08x)%s", rn, v, v, st!=null? "  \""+st+"\"" : ""));
+            // segue o ponteiro: [reg] como palavra, e a string apontada por ela (revela va_list -> arg %s)
+            int i0=idx(v);
+            if(i0>=0 && i0+3<mem.length){
+                int wv = (mem[i0]&0xff)|((mem[i0+1]&0xff)<<8)|((mem[i0+2]&0xff)<<16)|((mem[i0+3]&0xff)<<24);
+                String ds = peekStr(wv);
+                if(ds!=null) sb.append(String.format("   -> [%d] = %d \"%s\"", v, wv, ds));
+                else if(wv!=0) sb.append(String.format("   -> [%d] = %d", v, wv));
+            }
+            sb.append(String.format("%n"));
+        }
+        System.out.print(sb);
+    }
+
+    // ---------------- DEPURADOR: buffer circular dos ultimos PCs ----------------
+    // LASTPC=N guarda os ultimos N enderecos executados; dumpLastPcs() imprime o rastro.
+    // Serve p/ descobrir COMO o programa chegou num ponto (ex.: queda para codigo errado).
+    public final int lastPcN = System.getenv("LASTPC")!=null? Integer.parseInt(System.getenv("LASTPC").trim()) : 0;
+    private final int[] lastPcBuf = lastPcN>0? new int[lastPcN] : null;
+    private int lastPcPos = 0; private long lastPcCount = 0;
+    public void dumpLastPcs(){
+        if(lastPcBuf==null) return;
+        int n = (int)Math.min(lastPcCount, lastPcBuf.length);
+        System.out.printf("[RASTRO] ultimos %d enderecos executados (mais antigo -> mais recente):%n", n);
+        StringBuilder sb=new StringBuilder("   ");
+        for(int k=0;k<n;k++){
+            int v = lastPcBuf[(lastPcPos - n + k + lastPcBuf.length*2) % lastPcBuf.length];
+            sb.append(String.format("0x%x ", v));
+            if((k+1)%10==0){ System.out.println(sb); sb=new StringBuilder("   "); }
+        }
+        if(sb.length()>3) System.out.println(sb);
+    }
+
+    // ================= MULTITAREFA COOPERATIVA (igual ao nofun) =================
+    // Varios jogos criam uma tarefa (vCreateTask) e esperam por ela (vTaskAlive) enquanto a tarefa
+    // roda o trabalho de verdade. Sem escalonador, a tarefa nunca rodava e o jogo ficava em espera
+    // ocupada p/ sempre (Worms World Party: 1,3 milhao de vGetTickCount, tela preta).
+    // Modelo: cada tarefa guarda uma copia dos registradores; a troca acontece em SLEEP (yield),
+    // KILLTASK/retorno-p/-RA-sentinela (fim da tarefa). Fila FIFO, sem preempcao.
+    public static final int TASK_END = 0xFFF0;      // RA das tarefas: chegar aqui = tarefa terminou
+    public static final class Task {
+        public int id; public final int[] ctx = new int[33];
+        public int stackBlock = 0; public int recv = 0;
+    }
+    public final java.util.ArrayList<Task> taskQueue = new java.util.ArrayList<Task>();
+    public final java.util.HashMap<Integer,Task> tasks = new java.util.HashMap<Integer,Task>();
+    public Task currentTask = null;
+    public long sleepCount=0, switchCount=0;
+    private int nextTaskId = 1;
+
+    public int createTask(int entry, int p0, int p1, int p2, int stackTopAddr, int stackBlock){
+        Task t = new Task();
+        t.id = nextTaskId++; t.stackBlock = stackBlock;
+        t.ctx[PC>>2] = entry;  t.ctx[SP>>2] = stackTopAddr;  t.ctx[RA>>2] = TASK_END;
+        t.ctx[12] = p0; t.ctx[13] = p1; t.ctx[14] = p2;      // P0..P2 = r12..r14
+        tasks.put(t.id, t); taskQueue.add(t);
+        if(System.getenv("TASKLOG")!=null) System.out.printf("[TAREFAS] criada #%d entry=0x%x sp=0x%x instr=%d%n", t.id, entry, stackTopAddr, instr);
+        return t.id;
+    }
+    public boolean taskAlive(int id){ return tasks.containsKey(id); }
+    public int thisTaskId(){ return currentTask!=null? currentTask.id : 0; }
+    public void disposeTask(int id){
+        Task t = tasks.remove(id);
+        if(t!=null){ taskQueue.remove(t); if(t.stackBlock!=0 && sdk!=null) sdk.freePtr(t.stackBlock); }
+    }
+    private void saveCurrentTask(){
+        if(currentTask==null) return;
+        System.arraycopy(R, 0, currentTask.ctx, 0, R.length);
+    }
+    private void loadTask(Task t){
+        currentTask = t;
+        System.arraycopy(t.ctx, 0, R, 0, R.length);
+    }
+    /** Passa p/ a proxima tarefa da fila. Fila vazia = nao ha mais nada a executar -> para a VM. */
+    private void runNextTask(){
+        if(taskQueue.isEmpty()){ stopped=true; return; }
+        saveCurrentTask();
+        switchCount++;
+        loadTask(taskQueue.remove(0));
+    }
+    /** SLEEP: devolve a vez. Com uma tarefa so, ela volta imediatamente (no-op, como antes). */
+    public void yieldTask(){
+        if(taskQueue.isEmpty()) return;             // nada p/ alternar
+        if(currentTask==null) currentTask = mainTask();
+        saveCurrentTask();
+        taskQueue.add(currentTask);
+        switchCount++;
+        loadTask(taskQueue.remove(0));
+    }
+    /** Fim da tarefa atual (KILLTASK, ou retorno p/ TASK_END/0). */
+    public void terminateTask(){
+        if(System.getenv("TASKLOG")!=null) System.out.printf("[TAREFAS] termina #%d PC=0x%x instr=%d fila=%d%n", currentTask!=null?currentTask.id:-1, R[PC>>2], instr, taskQueue.size());
+        if(currentTask!=null && currentTask.id!=0){
+            tasks.remove(currentTask.id);
+            if(currentTask.stackBlock!=0 && sdk!=null) sdk.freePtr(currentTask.stackBlock);
+            currentTask = null;
+        }
+        if(taskQueue.isEmpty()){ stopped=true; return; }
+        loadTask(taskQueue.remove(0));
+    }
+    private Task mainTask(){
+        Task t = tasks.get(0);
+        if(t==null){ t = new Task(); t.id = 0; tasks.put(0, t); }
+        return t;
+    }
+
     public int pcWatch=0; public long pcWatchHits=0;
     public boolean fpWatch=false;
     public void run(long maxInstr){
@@ -182,7 +346,12 @@ public final class Pip2 {
     int prevPc=0; boolean derailReported=false;
     public void step(){
         int pc0 = R[PC>>2];
-        if(pc0==0){ stopped=true; return; }   // ret p/ RA=0 = fim de task (KILLTASK), termino limpo
+        if(pc0==TASK_END){ terminateTask(); return; }   // tarefa retornou p/ a sentinela
+        if(pc0==0){                            // ret p/ RA=0 = fim de task, termino limpo
+            if(!taskQueue.isEmpty()){ terminateTask(); return; }
+            stopped=true;
+            if(System.getenv("WHYSTOP")!=null) System.out.printf("[PARADA] MOTIVO DA PARADA: RET para RA=0 (main retornou) prevPC=0x%x instr=%d%n", prevPc, instr);
+            return; }
         if(!derailReported && (pc0 < codeBase || pc0 >= codeBase+exe.codeSize)){
             derailReported=true;
             System.err.printf("WARNING: PC outside code @instr %d: prevPC=0x%x -> PC=0x%x (off 0x%x)  RA=0x%x SP=0x%x%n",
@@ -190,9 +359,17 @@ public final class Pip2 {
             stopped=true; return;
         }
         prevPc=pc0;
+        if(lastPcBuf!=null){ lastPcBuf[lastPcPos]=pc0; lastPcPos=(lastPcPos+1)%lastPcBuf.length; lastPcCount++; }
+        if(pcTraceAddrs!=null && pcTraceHits<pcTraceMax){
+            for(int a : pcTraceAddrs) if(a==pc0){ pcTraceDump(pc0); break; }
+        }
         int word = read32(pc0); R[PC>>2]=pc0+4;
         int op=word&0xff, d=(word>>>8)&0xff, s=(word>>>16)&0xff, t=(word>>>24)&0xff;
         instr++;
+        if(ITLO!=0 && pc0>=ITLO && pc0<=ITHI && itN<ITMAX){ itN++;
+        System.out.printf("  [IT] PC=0x%x op=0x%02x d=%d(r%d=%d) s=%d(r%d=%d) t=%d(r%d=%d)%n",
+        pc0, op, d, d>>2, r32(d), s, s>>2, r32(s), t, t>>2, r32(t));
+            System.out.printf("         imm(pc+4)=%d (0x%x)  [s+imm]=0x%x%n", read32(pc0+4), read32(pc0+4), r32(s)+read32(pc0+4)); }
         if(instr<=traceSteps) System.out.printf("  [%d] PC=0x%x op=0x%02x d=%d s=%d t=%d  sp=0x%x%n",instr,pc0,op,d,s,t,R[SP>>2]);
         switch(op){
             case 0x00: /*BREAKPOINT*/ break;
@@ -266,8 +443,10 @@ public final class Pip2 {
             case 0x43: store(d,s); break;                          // STORE (d=start,s=count)
             case 0x44: restore(d,s); break;                        // RESTORE
             case 0x45: restore(d,s); R[PC>>2]=r32(RA); break;      // RET
-            case 0x46: stopped=true; break;                        // KILLTASK
-            case 0x47: /*SLEEP*/ break;                            // SLEEP
+            case 0x46: terminateTask();                            // KILLTASK: encerra a TAREFA (para a VM se for a ultima)
+                if(System.getenv("WHYSTOP")!=null) System.out.printf("[PARADA] MOTIVO DA PARADA: KILLTASK @PC=0x%x RA=0x%x instr=%d%n", pc0, R[RA>>2], instr);
+                break;
+            case 0x47: sleepCount++; yieldTask(); break;                         // SLEEP: devolve a vez p/ outra tarefa
             case 0x48: memcpy(r32(d), r32(s), r32(t)); break;      // SYSCPY
             case 0x49: memset(r32(d), r8(s), r32(t)); break;       // SYSSET
             case 0x4A: w32(d, r32(s)+(int)fetchImm()); break;      // ADDi
@@ -308,6 +487,7 @@ public final class Pip2 {
             case 0x66: brR((r32(d)&0xffffffffL)<(r32(s)&0xffffffffL)); break;         // BLTU
             default:
                 System.err.printf("PIP2: opcode 0x%02x not implemented @0x%x (instr %d)%n", op, pc0, instr);
+                dumpLastPcs();
                 stopped=true;
         }
     }

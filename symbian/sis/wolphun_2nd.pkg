@@ -1,0 +1,33 @@
+; wolphun_2nd.pkg - pacote do alvo SYMBIAN 8.1 / S60 2nd Edition FP3 (N70, N72, N90).
+;
+; E um SIS do formato VELHO, nao o SISX assinado do 9.x: no 8.1 nao existe plataforma
+; segura, entao nao ha signsis nem certificado -- o arquivo .sis instala direto.
+;
+; Diferencas estruturais em relacao ao wolphun_gcce.pkg (9.x):
+;   - nao ha linha %{} de fabricante nem :"" (isso e exigencia do 9.x);
+;   - o binario e um .app (DLL polimorfica), nao um .exe, e vai para \system\apps\wolphun
+;     junto dos recursos, em vez de \sys\bin + \resource\apps;
+;   - quem registra o app no menu e o .aif, nao um _reg.rsc em \private\10003a3f;
+;   - o UID da dependencia e 0x101F7960 (Series60ProductID da linha 2.x), nao 0x101F7961.
+;
+; @SDK@ e trocado pela raiz do SDK em makesis.cmd (perl), igual ao do 9.x.
+
+; nome do pacote, UID3, versao
+#{"wolphun emulator"},(0xA0000180),0,3,0
+
+; idioma
+&EN
+
+; Compatibilidade com a plataforma Series 60 2.x. Sem esta linha o instalador do aparelho
+; recusa com "nao compativel".
+(0x101F7960), 0, 0, 0, {"Series60ProductID"}
+
+; o aplicativo: DLL polimorfica .app
+"@SDK@\epoc32\release\armi\urel\wolphun.app" - "!:\system\apps\wolphun\wolphun.app"
+
+; recursos de UI e legenda
+"@SDK@\epoc32\data\z\system\apps\wolphun\WOLPHUN.RSC"         - "!:\system\apps\wolphun\wolphun.rsc"
+"@SDK@\epoc32\data\z\system\apps\wolphun\WOLPHUN_CAPTION.RSC" - "!:\system\apps\wolphun\wolphun_caption.rsc"
+
+; registro no menu do aparelho
+"@SDK@\epoc32\data\z\system\apps\wolphun\WOLPHUN.AIF"         - "!:\system\apps\wolphun\wolphun.aif"

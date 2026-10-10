@@ -29,6 +29,10 @@ public final class GameSession {
     volatile EndListener endListener;
     public void setEndListener(EndListener l){ this.endListener = l; }
 
+    /** Contexto do app, so para servicos do aparelho (vibracao). Pode ser null em testes. */
+    private android.content.Context ctx;
+    public GameSession setContext(android.content.Context c){ ctx=c; return this; }
+
     public GameSession(File mpn, String gameName, PrefsConfig cfg, File saveDir){
         this.mpnFile=mpn; this.gameName=gameName; this.cfg=cfg; this.saveDir=saveDir;
     }
@@ -55,15 +59,39 @@ public final class GameSession {
         scr.gamma = cfg.gamma;
         scr.setFontScale(cfg.fontScale);
 
-        vm  = new Pip2(exe, 4*1024*1024, 256*1024);
+        // mesma formula do desktop: nenhuma ROM do acervo passa de 4 MB (a maior pede 60 KB),
+        // mas assim uma ROM que peca mais nao roda com heap curto.
+        vm  = new Pip2(exe, (int)Math.max(4L*1024*1024, exe.heapBytesRequested()), 256*1024);
         sdk = new Sdk(vm, scr);
         sdk.soundEnabled = cfg.sound;
         sdk.reverb       = cfg.reverb;
         sdk.deviceModel  = model;
         sdk.deviceVendor = PrefsConfig.vendorForModel(model);
+        sdk.romDir  = mpnFile!=null? mpnFile.getAbsoluteFile().getParentFile() : null;   // .mpc companheiros
         sdk.saveDir = saveDir;
+        sdk.r3d.texFilterForce = cfg.texFilter;               // FILTERMODE: 0=jogo 1=bilinear 2=nearest
+        // Vibracao: o jogo pede por vSysCtl(SYSCTL_SETVIBRATE). So ligamos se o usuario deixou
+        // ativo nas opcoes E o aparelho tem motor (tablet/emulador normalmente nao tem).
+        if(ctx!=null && cfg.vibrate){
+            Vibra v = new Vibra(ctx, true);
+            if(v.disponivel()) sdk.vibrador = v;
+        }
         vm.sdk = sdk;
         vm.runConstructors();   // construtores globais C++ ("~C") antes do main (ex.: HC1 inicializa entidades/sprites)
+    }
+
+    // teclas de aparelho que ESTA ROM consulta (203/204/...). Analise estatica feita uma vez, no
+    // carregamento: custa 0-25 ms e evita manter lista de nomes de jogo na mao.
+    private java.util.Set<Integer> phoneKeys;
+    public java.util.Set<Integer> phoneKeysUsed(){
+        if(phoneKeys==null){
+            java.util.Set<Integer> all = vm!=null ? wolphun.vm.KeyScan.keysUsedBy(vm)
+                                                  : new java.util.TreeSet<Integer>();
+            java.util.TreeSet<Integer> out = new java.util.TreeSet<Integer>();
+            for(int c : new int[]{203,204}) if(all.contains(c)) out.add(c);
+            phoneKeys = out;
+        }
+        return phoneKeys;
     }
 
     public Screen getScreen(){ return scr; }
@@ -100,7 +128,12 @@ public final class GameSession {
         }
     }
 
-    public void pause(){ paused=true; stopSound(); }
+    // No Android o sistema pode MATAR o processo depois do onPause, sem passar pelo stop():
+    // por isso o save nativo e descarregado aqui, e nao so ao fechar o jogo.
+    public void pause(){
+        paused=true; stopSound();
+        try { if(sdk!=null) sdk.flushSaves(); } catch(Throwable t){}
+    }
     public void resume(){ paused=false; }
     public boolean isPaused(){ return paused; }
     public boolean isStopped(){ return vm!=null && vm.stopped; }

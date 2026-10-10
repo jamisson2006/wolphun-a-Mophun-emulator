@@ -17,11 +17,17 @@ public final class Config {
     // Select(0x20) e a softkey de menu/OK; Fire2(0x100) e a 2a softkey/acao.
     // Cada acao aceita VARIAS teclas (setas + WASD + numpad), estilo KEmulator.
     public static final int KEYMAP_VERSION = 3;   // v3 = bits reais + multi-tecla + softkeys ajustadas (reseta defaults)
-    public static final String[] ACTIONS    = {"Up","Down","Left","Right","Fire / OK","Select (softkey/menu)","Fire2 (softkey 2)","Key 2","Key 3"};
+    public static final String[] ACTIONS    = {"Up","Down","Left","Right","Fire / OK","Select (softkey/menu)","Fire2 (softkey 2)","Key 2","Key 3",
+        "Back / Exit (phone 203)","Clear / Delete (phone 204)"};
     // Key 2 / Key 3 = teclas de KEYPAD numerico ('2'/'3'), lidas por vTestKey — nao sao bits de d-pad.
     // Alguns jogos (Bomb Jack) leem essas teclas direto p/ mover; o KEYPAD_FLAG marca o valor como keypad.
+    // Back(203) e Clear(204) sao TECLAS DO APARELHO (vmgpsonyericsson.h: KEY_SONYERICSSON_NO e _CLEAR).
+    // Nao ha bit de botao equivalente, por isso viajam pelo mesmo mecanismo de keypad. Achadas pela
+    // analise estatica das ROMs (wolphun.vm.KeyScan): Ice Digger/Nostalgia Ball/Bomb Jack/SAAF pedem 203
+    // ("no BACK function" na planilha) e 4-in-1/Kely Slater pedem 204 (o pause do jogo "Jake").
     public static final int[]    ACTION_BITS = {0x01,0x02,0x04,0x08,0x10,0x20,0x100,
-        wolphun.Screen.KEYPAD_FLAG|('2'<<16), wolphun.Screen.KEYPAD_FLAG|('3'<<16)};
+        wolphun.Screen.KEYPAD_FLAG|('2'<<16), wolphun.Screen.KEYPAD_FLAG|('3'<<16),
+        wolphun.Screen.KEYPAD_FLAG|(203<<16), wolphun.Screen.KEYPAD_FLAG|(204<<16)};
     // defaults com MULTIPLAS teclas: setas/WASD + numpad posicional (num8=cima, num2=baixo, etc.,
     // igual ao teclado do celular) -> "todos os teclados funcionando".
     public static final int[][]  ACTION_DEF_VK = {
@@ -33,7 +39,9 @@ public final class Config {
         {KeyEvent.VK_Q,     KeyEvent.VK_NUMPAD0},                           // Select = softkey esq. / menu / OK / sair (celular: tecla 0). Sem Shift (evita sair sem querer)
         {KeyEvent.VK_E,     KeyEvent.VK_BACK_SPACE, KeyEvent.VK_X},         // Fire2  = softkey dir. / 2a acao (Backspace = "voltar")
         {KeyEvent.VK_2},                                                    // Key 2  = tecla numerica '2' do keypad (Bomb Jack)
-        {KeyEvent.VK_3}                                                     // Key 3  = tecla numerica '3' do keypad (Bomb Jack)
+        {KeyEvent.VK_3},                                                    // Key 3  = tecla numerica '3' do keypad (Bomb Jack)
+        {KeyEvent.VK_ESCAPE},                                               // Back   = tecla vermelha do celular (voltar/sair do jogo)
+        {KeyEvent.VK_DELETE}                                                // Clear  = tecla "C" do celular (apagar / pause em alguns jogos)
     };
 
     // ---- valores ----
@@ -57,8 +65,16 @@ public final class Config {
     public String  language = "en";      // idioma padrao da interface (en/es/de/pt/uk/ru)
     public double  fontScale = 1.0;      // escala do texto DENTRO do jogo (vTextOut/vMsgBox). 1.0=nativo; >1.0 aumenta legibilidade em celular
     public int     renderScale = 1;      // supersampling interno (HD): 1=nativo; 2..4 = rende o 3D em N x (nitido). 2D escala em bloco.
+    public boolean exactColors = false;  // true = usa a cor de texto escolhida SEM ajuste de contraste
+    public boolean gameMaximized = false;// lembra se a janela do JOGO estava maximizada (F11)
     public double  gamma = 1.0;          // brilho de display: 1.0=cores exatas (SDK, lineares); <1.0 clareia (curva
                                          // ~1/2.2 do LCD/oficial), preservando matiz. Ajustavel no slider "Brilho".
+    // ---- filtro de textura 3D (VMGP3D_FILTERMODE, estado 13) ----
+    // O SDK define TEXFILTER_LINEAR e, diferente de FOGENABLE/PERSPECTIVEENABLE, NAO marca o filtro
+    // como indisponivel no renderer de software -> filtrar e legitimo. Mas quase nenhum jogo chama
+    // vSetRenderState(FILTERMODE), ficando no nearest default: ao ampliar, os texels viram blocos.
+    // 0 = segue o jogo; 1 = forca bilinear (suaviza); 2 = forca nearest.
+    public int texFilter = 0;
 
     // modelos de aparelho (SystemDeviceModel do nofun) -> nome + vendor + resolucao sugerida
     public static final String[] MODEL_NAMES = {
@@ -98,6 +114,13 @@ public final class Config {
     public File savesDir(String gameName){
         String safe = gameName.replaceAll("[^A-Za-z0-9_.-]", "_");
         File d = new File(new File(appDir(),"saves"), safe);
+        if(!d.exists()) d.mkdirs();
+        return d;
+    }
+
+    /** pasta das capturas de tela: ~/.mophunemu/screenshots (uma so, nao por jogo). */
+    public static File shotsDir(){
+        File d = new File(appDir(), "screenshots");
         if(!d.exists()) d.mkdirs();
         return d;
     }
@@ -153,6 +176,9 @@ public final class Config {
         c.renderScale = getInt(p,"renderScale", c.renderScale);
         c.deviceModel = getInt(p,"deviceModel", c.deviceModel);
         try { c.gamma = Double.parseDouble(p.getProperty("gamma", String.valueOf(c.gamma))); } catch(Exception e){}
+        c.texFilter = getInt(p,"texFilter", c.texFilter);
+        c.exactColors = "true".equals(p.getProperty("exactColors", String.valueOf(c.exactColors)));
+        c.gameMaximized = "true".equals(p.getProperty("gameMaximized", String.valueOf(c.gameMaximized)));
         try { c.fontScale = Double.parseDouble(p.getProperty("fontScale", String.valueOf(c.fontScale))); } catch(Exception e){}
         c.language = p.getProperty("language", c.language); Lang.setByCode(c.language);
         // keymap: so carrega os binds salvos se a VERSAO bate; senao mantem os novos defaults
@@ -169,6 +195,8 @@ public final class Config {
         Properties p = new Properties();
         if(gamesRoot!=null) p.setProperty("gamesRoot", gamesRoot);
         if(soundFont!=null) p.setProperty("soundFont", soundFont);
+        p.setProperty("exactColors", String.valueOf(exactColors));
+        p.setProperty("gameMaximized", String.valueOf(gameMaximized));
         p.setProperty("scale",  String.valueOf(scale));
         p.setProperty("width",  String.valueOf(width));
         p.setProperty("height", String.valueOf(height));
@@ -185,6 +213,7 @@ public final class Config {
         p.setProperty("renderScale", String.valueOf(renderScale));
         p.setProperty("deviceModel", String.valueOf(deviceModel));
         p.setProperty("gamma",       String.valueOf(gamma));
+        p.setProperty("texFilter",     String.valueOf(texFilter));
         p.setProperty("fontScale",   String.valueOf(fontScale));
         p.setProperty("language",    language);
         p.setProperty("keymapVersion", String.valueOf(KEYMAP_VERSION));

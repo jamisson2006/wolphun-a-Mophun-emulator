@@ -1,0 +1,36 @@
+; MODELO. @SDK@ e trocado pela raiz do SDK do alvo em makesis.cmd (perl), porque o
+; makesis deste SDK NAO expande $(EPOCROOT). Assim o mesmo arquivo empacota fp1,
+; 3rd ou 5th. Com o caminho do FP1 fixo aqui, compilar para outro alvo e empacotar
+; em seguida empacotava silenciosamente o binario VELHO.
+;
+; NOTA: o makesis v4 NAO expande @SDK@\epoc32\ -- por isso os caminhos de origem sao
+; ABSOLUTOS. O arquivo precisa estar em CRLF.
+
+; nome do pacote, UID3, versao
+#{"wolphun emulator"},(0xA0000180),0,3,0
+
+; idioma
+&EN
+
+; fabricante (obrigatorio no Symbian 9.x)
+%{"Jamisson Tavares"}
+:"Jamisson Tavares"
+
+; Declara compatibilidade com a plataforma S60 3rd Edition. SEM esta linha o instalador
+; do aparelho mostra "Aplicacao nao compativel com o telefone" (ele nao assume nada: a
+; ausencia de dependencia e tratada como "desconhecido"). O intervalo 0.0 ate 0.0 com o
+; UID 0x101F7961 (Series60ProductID) cobre S60 3rd FP1/FP2 e seguintes.
+[0x101F7961], 0, 0, 0, {"Series60ProductID"}
+
+; executavel
+"@SDK@\epoc32\release\gcce\urel\wolphun.exe" - "!:\sys\bin\wolphun.exe"
+
+; recursos de UI
+"@SDK@\epoc32\data\z\resource\apps\wolphun.RSC"     - "!:\resource\apps\wolphun.rsc"
+"@SDK@\epoc32\data\z\resource\apps\wolphun_loc.RSC" - "!:\resource\apps\wolphun_loc.rsc"
+
+; icone do aplicativo (mesmo logo da versao desktop)
+"@SDK@\epoc32\data\z\resource\apps\wolphun_aif.mbm" - "!:\resource\apps\wolphun_aif.mbm"
+
+; registro: e ISTO que faz o app aparecer no menu do aparelho
+"@SDK@\epoc32\data\z\private\10003a3f\apps\wolphun_reg.RSC" - "!:\private\10003a3f\import\apps\wolphun_reg.rsc"

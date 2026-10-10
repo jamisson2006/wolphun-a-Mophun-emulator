@@ -1,0 +1,7 @@
+// bld.inf do alvo 8.1 (EKA1). Ver group2nd\wolphun2nd.mmp para o porque de ser
+// um diretorio separado do group\.
+PRJ_PLATFORMS
+ARMI THUMB
+
+PRJ_MMPFILES
+wolphun2nd.mmp

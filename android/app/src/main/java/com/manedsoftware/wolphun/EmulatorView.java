@@ -22,6 +22,8 @@ import wolphun.Screen;
 public final class EmulatorView extends SurfaceView implements SurfaceHolder.Callback {
 
     public interface MenuListener { void onMenu(); }
+    /** recebe o bitmap da captura (ou null se falhou). Chamado na THREAD DE RENDER. */
+    public interface CaptureCallback { void onCaptured(Bitmap bmp); }
 
     private Screen scr;
     private Bitmap frame;
@@ -39,6 +41,11 @@ public final class EmulatorView extends SurfaceView implements SurfaceHolder.Cal
     private int[] pixelBuf;
     private int diag = 0;
 
+    // ---- captura de tela (screenshot) ----
+    private volatile CaptureCallback capCb;        // != null = ha uma captura pedida
+    private volatile boolean capControls;          // incluir o teclado virtual na imagem
+    private volatile boolean everPresented;        // ja veio pelo menos um frame do jogo
+
     // ---- modo de edição do teclado (mover/redimensionar) ----
     private volatile boolean editMode = false;
     private VirtualKeypad.Btn dragBtn;
@@ -48,6 +55,10 @@ public final class EmulatorView extends SurfaceView implements SurfaceHolder.Cal
     public void importKeypad(String s){ keypad.importLayout(s); }
     public String exportKeypad(){ return keypad.exportLayout(); }
     public void resetKeypad(){ keypad.resetLayout(); }
+    public void setPhoneKeys(java.util.Set<Integer> codes){ keypad.setPhoneKeys(codes); postInvalidate(); }
+    public void hidePhoneKeys(){ keypad.hidePhoneKeys(); postInvalidate(); }
+    public void setWalkKeys(boolean on){ keypad.setWalkKeys(on); postInvalidate(); }
+    public void setLayoutPreset(int p){ keypad.setLayoutPreset(p); postInvalidate(); }
     /** mostra/oculta os botões de tecla numérica 2/3 (por jogo — ex.: Bomb Jack). */
     public void setShowNumbers(boolean on){ keypad.setShowNumbers(on); }
     /** mostra/oculta o botão ≡ desenhado no canvas (usamos um Button real na Activity). */
@@ -63,6 +74,21 @@ public final class EmulatorView extends SurfaceView implements SurfaceHolder.Cal
             int nw=Math.max(1,Math.round(w*s)), nh=Math.max(1,Math.round(h*s));
             return Bitmap.createScaledBitmap(f, nw, nh, true);
         } catch(Throwable t){ return null; }
+    }
+
+    /**
+     * Pede uma captura de tela NA RESOLUCAO DO APARELHO (nao na do jogo).
+     * O frame e composto do mesmo jeito que vai para a tela: o framebuffer do jogo
+     * escalonado para os pixels da superficie, com a mesma proporcao e o mesmo filtro.
+     *
+     * @param withControls true = tela cheia como o usuario ve (letterbox + teclado virtual);
+     *                     false = so a area do jogo, recortada (sem barras e sem botoes).
+     * O callback vem na thread de render -> NAO comprimir/gravar dentro dele.
+     */
+    public void requestCapture(boolean withControls, CaptureCallback cb){
+        if(cb == null) return;
+        capControls = withControls;
+        capCb = cb;
     }
 
     public EmulatorView(Context ctx){
@@ -114,20 +140,22 @@ public final class EmulatorView extends SurfaceView implements SurfaceHolder.Cal
         int w = s.pw, h = s.ph;              // dimensoes FISICAS (supersampling HD); a razao de aspecto e a mesma da logica
         if(frame==null || frame.getWidth()!=w || frame.getHeight()!=h){
             frame = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+            everPresented = false;
             src.set(0,0,w,h);
             pixelBuf = new int[w*h];
         }
         blit.setFilterBitmap(s.rs>1);                     // downscale do buffer HD -> bilinear (anti-aliasing)
         boolean has = s.copyPresented(pixelBuf);          // frame COMPLETO (sem tearing)
-        if(has) frame.setPixels(pixelBuf, 0, w, 0, 0, w, h);
+        if(has){ frame.setPixels(pixelBuf, 0, w, 0, 0, w, h); everPresented = true; }
 
         SurfaceHolder holder = getHolder();
         Canvas c = holder.lockCanvas();
         if(c==null) return;
+        final int vw = c.getWidth(), vh = c.getHeight();   // pixels REAIS do aparelho
         try {
             c.drawColor(Color.BLACK);
             if(has){
-                computeDst(c.getWidth(), c.getHeight(), w, h);
+                computeDst(vw, vh, w, h);
                 c.drawBitmap(frame, src, dst, blit);
             }
             keypad.draw(c, s, menuDown, editMode);
@@ -135,7 +163,38 @@ public final class EmulatorView extends SurfaceView implements SurfaceHolder.Cal
             holder.unlockCanvasAndPost(c);
         }
 
+        // Captura pedida pelo menu: feita AQUI, nesta thread, com o frame que acabou de ir
+        // para a tela -- e por isso que a imagem nunca sai meio escrita nem com tearing.
+        CaptureCallback cb = capCb;
+        if(cb != null){ capCb = null; doCapture(s, cb, vw, vh); }
+
         if(diag < 4){ diag++; Log.d("wolphun", "render flips="+s.flips+" has="+has+" w="+w+" h="+h); }
+    }
+
+    /** Compoe a imagem da captura. Mesma matematica do blit da tela: o tamanho sai dos
+        pixels da superficie (vw x vh), nunca de s.pw/s.ph (que e a resolucao do JOGO). */
+    private void doCapture(Screen s, CaptureCallback cb, int vw, int vh){
+        Bitmap out = null;
+        try {
+            Bitmap f = frame;
+            if(everPresented && f != null && !f.isRecycled() && vw > 0 && vh > 0){
+                computeDst(vw, vh, f.getWidth(), f.getHeight());
+                final Rect area = new Rect(dst);        // onde o jogo esta na tela
+                if(capControls){
+                    out = Bitmap.createBitmap(vw, vh, Bitmap.Config.ARGB_8888);
+                    Canvas cc = new Canvas(out);
+                    cc.drawColor(Color.BLACK);
+                    cc.drawBitmap(f, src, area, blit);
+                    keypad.draw(cc, s, false, false);   // sem realce de tecla pressionada
+                } else {
+                    final int w = Math.max(1, area.width()), h = Math.max(1, area.height());
+                    out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+                    Canvas cc = new Canvas(out);
+                    cc.drawBitmap(f, src, new Rect(0, 0, w, h), blit);
+                }
+            }
+        } catch(Throwable t){ out = null; }             // sem memoria p/ o bitmap, p.ex.
+        try { cb.onCaptured(out); } catch(Throwable ignore){}
     }
 
     // letterbox preservando proporção. Em RETRATO joga a tela do jogo p/ CIMA e reserva

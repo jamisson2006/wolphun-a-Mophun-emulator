@@ -1,0 +1,18 @@
+/* wolphunaif.rss - AIF (Application Information File) do alvo 8.1.
+ *
+ * E o equivalente do wolphun_reg.rss do 9.x: e ISTO que faz o app aparecer no menu do
+ * aparelho. No 9.x o registro e um .rsc em \private\10003a3f; no 8.1 e um .aif binario
+ * gerado pelo aiftool a partir deste arquivo e instalado junto do .app.
+ *
+ * num_icons = 2: os dois tamanhos do Series 60 2nd Edition (contexto e lista). Os
+ * bitmaps em si estao listados na linha AIF do wolphun2nd.mmp, nao aqui.
+ */
+#include <aiftool.rh>
+
+RESOURCE AIF_DATA
+    {
+    app_uid       = 0xA0000180;
+    num_icons     = 2;
+    embeddability = KAppNotEmbeddable;
+    newfile       = KAppDoesNotSupportNewFile;
+    }
