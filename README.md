@@ -187,7 +187,7 @@ wolphun was written by studying open-source Mophun preservation projects. Huge t
 
 - **[nofun](https://github.com/RadratSoftworks/nofun)** by *RadratSoftworks* — the C# Mophun emulator used as the **authoritative reference** for SDK / VMGP behaviour (graphics, input, sound, device caps, and the 3D pipeline). A large part of wolphun's SDK layer follows nofun's semantics.
 - **[MoRePhun](https://github.com/Luca1991/MoRePhun)** — reference for the PIP2 opcodes.
-- **[TinySoundFont & TinyMidiLoader](https://github.com/schellingb/TinySoundFont)** by *Bernhard Schelling* — bundled in `android/app/src/main/cpp/` to power the Android SoundFont (.sf2) playback. `tsf.h` is MIT, `tml.h` is zlib; both keep their own licence, reproduced in the files and listed in [NOTICE](NOTICE).
+- **[TinySoundFont & TinyMidiLoader](https://github.com/schellingb/TinySoundFont)** by *Bernhard Schelling* — bundled in `android/app/src/main/cpp/` to power the Android SoundFont (.sf2) playback. `tsf.h` is MIT and `tml.h` is zlib; both keep their own licence, reproduced in full in the files themselves.
 
 wolphun is an **independent reimplementation** (Java on desktop and Android, C++ on
 Symbian) — no code was copied from the projects above; they were used to understand the
@@ -203,13 +203,13 @@ The same link (and a QR code for it) is in **Help → About** inside the emulato
 
 ## License
 
-Released under the **Apache License 2.0** — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+Released under the **GNU GPL-3.0** — see [LICENSE](LICENSE).
 
-You may use, modify and redistribute it, including in closed-source and commercial work,
-as long as you keep the copyright and licence notices and state what you changed. The
-licence also grants an explicit patent licence from the contributors.
+You may use, modify and redistribute it, and you are free to study and change the source.
+Derivative works must stay under the GPL and ship their source as well.
 
-Bundled third-party files keep their own licences; see [NOTICE](NOTICE).
+Bundled third-party files keep their own licences, which are GPL-compatible: `tsf.h` is
+MIT and `tml.h` is zlib, both reproduced in full in the files themselves.
 
 ---
 
