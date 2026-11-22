@@ -97,12 +97,25 @@ public:
     bool keypadPressed(int ascii) const { return ascii>=0 && ascii<256 && keypadDown[ascii]!=0; }
 
     /* ---- the system font, standing in for vTextOut / vTextOutU / vPrint ---- */
-    /* The SDK's vSelectFont(size, flags); with a bitmap font only the integer SCALE
-       can vary. */
-    void selectFont(int size, int flags);
+    /* A system font the front-end can load from a file. NULL restores the
+       bundled face. The pointed-to arrays must outlive the Screen. */
+    struct SysFont {
+        int height;
+        int first;
+        int last;
+        const unsigned char* widths;
+        const unsigned short* bits;
+    };
+    void setSystemFont(const SysFont* font);
+
+    /* vSelectFont(size, flags, ch): returns the flags actually honoured.
+       The bundled face is chosen by screen class (10px for 101x80, 14px for
+       128x160 and up); bold and the SDK's shadow/outline effects are drawn
+       here, in the current background colour, as the SDK specifies. */
+    int  selectFont(int size, int flags, int ch);
     int  textWidth(const char* s) const;
     int  fontHeight() const;
-    void drawText(int x,int y,const char* s,u32 argbFg);
+    void drawText(int x,int y,const char* s,u32 argbFg,u32 argbBg);
 
     int  messageBox(const char* title, const char* msg);
 
@@ -111,10 +124,16 @@ public:
 private:
     void initRgb332Palette();
     int  charWidth(unsigned char c) const;
+    const SysFont* activeFont() const;
+    void drawPass(int x,int y,const char* s,int dx,int dy,u32 color);
 
     volatile int buttons;
     u8  keypadDown[256];     /* 0..127 ASCII plus 200..217, the handset keys */
     int fontScale;           /* integer scale of the bitmap font (1..4) */
+    int baseFont;            /* index into the bundled system fonts */
+    const SysFont* customFont;  /* front-end supplied font, or NULL */
+    int fontStyle;           /* FONT_STYLE_* bits from vSelectFont */
+    int fontEffect;          /* FONT_EFFECT_* bits from vSelectFont */
     int lastFontSize, lastFontFlags;
     u32 lastFlipMs;
 };

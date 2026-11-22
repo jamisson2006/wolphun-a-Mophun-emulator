@@ -316,7 +316,7 @@ int Sdk::setActiveFont(int ptr){
 void Sdk::vPrintImpl(int mode,int x,int y,const char* str){
     fontRefresh();                      /* a struct pode ter mudado desde o vSetActiveFont */
     if (aFontPtr==0 || aFontW<=0 || aFontH<=0){
-        scr->drawText(x, y, str, getColor(foreColor));   /* sem fonte do jogo: a do sistema */
+        scr->drawText(x, y, str, getColor(foreColor), getColor(backColor));   /* sem fonte do jogo: a do sistema */
         return;
     }
     if (!str || !*str) return;
