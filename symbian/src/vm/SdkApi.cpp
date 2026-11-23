@@ -257,7 +257,7 @@ void Sdk::invokeId(int id){
     case A_mapSetAttribute: mapSetAttr(vm->arg(0)&0xff, vm->arg(1)&0xff, vm->arg(2)&0xff); break;
 
     /* ---------- texto ---------- */
-    case A_selectFont:    scr->selectFont(vm->arg(0), vm->arg(1)); vm->ret(vm->arg(1)); break;
+    case A_selectFont:    vm->ret(scr->selectFont(vm->arg(0), vm->arg(1), vm->arg(2))); break;
     case A_setActiveFont: vm->ret(setActiveFont(vm->arg(0))); break;
     /* vTextOut/vTextOutU desenham com a fonte DO SISTEMA, nao com a fonte ativa do
        jogo. Ja tentei rotear para vPrintImpl e e ERRADO: o Honey Cave 2 ingles, que
@@ -268,13 +268,15 @@ void Sdk::invokeId(int id){
     case A_textOut: {
         char b[512];
         scr->drawText((i16)vm->arg(0), (i16)vm->arg(1),
-                      readStr(vm->arg(2), false, b, (int)sizeof(b)), getColor(foreColor));
+                      readStr(vm->arg(2), false, b, (int)sizeof(b)),
+                      getColor(foreColor), getColor(backColor));
         vm->ret(0); break;
     }
     case A_textOutU: {
         char b[512];
         scr->drawText((i16)vm->arg(0), (i16)vm->arg(1),
-                      readStr(vm->arg(2), true, b, (int)sizeof(b)), getColor(foreColor));
+                      readStr(vm->arg(2), true, b, (int)sizeof(b)),
+                      getColor(foreColor), getColor(backColor));
         vm->ret(0); break;
     }
     case A_print: {
